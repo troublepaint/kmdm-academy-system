@@ -7,6 +7,8 @@ errores de escritura: Python solo acepta los valores definidos aquí.
 """
 from enum import Enum
 
+# [SOLID-S] Este archivo solo define valores fijos; no contiene lógica.
+
 
 class EstadoSesion(Enum):
     """Estados por los que pasa una sesión de clase."""
