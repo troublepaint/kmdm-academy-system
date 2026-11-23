@@ -2,6 +2,13 @@
 
 Es la clase central del sistema: conecta casi todas las demás y contiene las
 reglas más importantes (solapes, conflictos, cupo y cambios de estado).
+
+Qué se aplicó aquí:
+  [PATRÓN: Prototype]   [NUEVO] el método clonar() copia una sesión cambiando solo lo
+                        necesario (SistemaAcademico.duplicar_sesion() lo usa).
+  [SOLID-S]             la sesión conoce SUS reglas (solapes, cupo, estados); las reglas
+                        que dependen de TODAS las sesiones están en servicios/reglas.py.
+  [PATRÓN: State]       (simple) _TRANSICIONES limita a qué estado se puede pasar.
 """
 from __future__ import annotations
 
@@ -147,6 +154,38 @@ class SesionClase:
         mismo_docente = self._docente.id == otra.docente.id
         misma_aula = self._aula.codigo == otra.aula.codigo
         return mismo_docente or misma_aula
+
+    def clonar(self, id_sesion: int, dia: Optional[DiaSemana] = None,
+               hora_inicio: Optional[time] = None, hora_fin: Optional[time] = None,
+               cupo: Optional[int] = None, docente: Optional[Docente] = None,
+               aula: Optional[Aula] = None,
+               periodo: Optional[Periodo] = None) -> SesionClase:
+        """[NUEVO] [PATRÓN: Prototype] Devuelve una COPIA con los cambios indicados.
+
+        Problema que resuelve: una misma clase se repite varios días y en cada
+        período nuevo; crear cada una desde cero obliga a repetir los 9 datos.
+        La propia sesión sabe clonarse (puede leer sus atributos privados).
+
+        Decisiones de diseño:
+          * Asignatura, docente, aula y período se COMPARTEN (no se copian): son
+            entidades del sistema, no partes de la sesión. Copiar un docente
+            crearía "otra persona" con el mismo id.
+          * El clon nace en BORRADOR, sin motivo ni coordinador: una copia de una
+            sesión aprobada NO está aprobada y debe revisarse de nuevo.
+          * Se llama al constructor, que vuelve a validar todo: un clon inválido
+            no puede existir.
+        """
+        return type(self)(
+            id_sesion,
+            dia or self._dia,
+            hora_inicio or self._hora_inicio,
+            hora_fin or self._hora_fin,
+            cupo or self._cupo,
+            self._asignatura,
+            docente or self._docente,
+            aula or self._aula,
+            periodo or self._periodo,
+        )
 
     def reemplazar_docente(self, nuevo: Docente) -> None:
         """Se usa cuando un docente pasa a ser coordinador: es la misma
