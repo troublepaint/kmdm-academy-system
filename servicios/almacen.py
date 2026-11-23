@@ -5,6 +5,13 @@ Contiene dos implementaciones de la interfaz Almacenamiento:
   * AlmacenMemoria -> guarda solo en memoria (útil para pruebas).
 Las dos cumplen el mismo contrato, por eso se pueden intercambiar.
 [INTERFAZ + POLIMORFISMO]
+
+Etiquetas de esta entrega (ver README.md):
+  [U2-POLIMORFISMO-INTERFACES] ambas clases implementan la interfaz Almacenamiento.
+  [PATRÓN: Factory Method]     _desde_diccionario() usa creador_para(rol) en lugar
+                               de un if/else para crear Docente o Coordinador.
+  [U2-INYECCIÓN-DEPENDENCIAS]  AlmacenJSON RECIBE la función que crea el sistema.
+  [SOLID-O/D]                  un rol nuevo no obliga a editar este archivo.
 """
 from __future__ import annotations
 
@@ -12,11 +19,11 @@ import json
 import os
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from modelos import (Administrador, Asignatura, Aula, AulaClasificacion,
-                     CoordinadorAcademico, DiaSemana, Docente, EstadoSesion,
-                     Periodo, SesionClase)
+                     DiaSemana, EstadoSesion, Periodo, SesionClase,
+                     creador_para)
 
 from .almacenamiento import Almacenamiento
 from .sistema import SistemaAcademico
@@ -34,8 +41,13 @@ class AlmacenJSON(Almacenamiento):
     diccionarios (guardar) y reconstruirlos después (cargar).
     """
 
-    def __init__(self, ruta: Path):
+    def __init__(self, ruta: Path,
+                 fabrica_sistema: Callable[..., SistemaAcademico] = SistemaAcademico):
         self._ruta = Path(ruta)
+        # [U2-INYECCIÓN-DEPENDENCIAS] [SOLID-D] Se RECIBE la función que crea el
+        # SistemaAcademico (con sus reglas y constructor ya configurados). Así el
+        # almacén no necesita saber con qué reglas trabaja el sistema.
+        self._fabrica_sistema = fabrica_sistema
 
     @property
     def ruta(self) -> Path:
@@ -118,8 +130,7 @@ class AlmacenJSON(Almacenamiento):
             # Cualquier problema al leer se convierte en un error propio y claro.
             raise ArchivoDatosError(f"{type(error).__name__}: {error}") from error
 
-    @staticmethod
-    def _desde_diccionario(d: dict) -> SistemaAcademico:
+    def _desde_diccionario(self, d: dict) -> SistemaAcademico:
         """Reconstruye los objetos a partir de los diccionarios del JSON.
 
         El ORDEN importa: primero lo que no depende de nada (clasificaciones,
@@ -129,15 +140,21 @@ class AlmacenJSON(Almacenamiento):
         a = d["administrador"]
         admin = Administrador(a["id"], a["nombre"], a["apellido"], a["correo"],
                               a["codigo_admin"], date.fromisoformat(a["fecha_ingreso"]))
-        sistema = SistemaAcademico(admin, con_clasificaciones_base=False)
+        sistema = self._fabrica_sistema(admin, False)  # False = sin clasificaciones base
 
         for c in d["clasificaciones"]:
             sistema.agregar_clasificacion(AulaClasificacion(
                 c["id"], c["nombre"], c["descripcion"], c["requiere_equipamiento"]))
+        no_disponibles = []
         for x in d["aulas"]:
+            # Las aulas se crean SIEMPRE disponibles y se desactivan al final: una sesión
+            # guardada antes de desactivar su aula debe poder cargarse (SesionClase rechaza
+            # aulas no disponibles al crearse).
             admin.registrar_aula(Aula(
                 x["codigo"], x["nombre"], x["capacidad"], x["ubicacion"],
-                sistema.buscar_clasificacion(x["clasificacion_id"]), x["disponible"]))
+                sistema.buscar_clasificacion(x["clasificacion_id"]), True))
+            if not x["disponible"]:
+                no_disponibles.append(x["codigo"])
         for x in d["asignaturas"]:
             admin.registrar_asignatura(Asignatura(
                 x["codigo"], x["nombre"], x["nivel"],
@@ -147,13 +164,10 @@ class AlmacenJSON(Almacenamiento):
                 x["id"], x["nombre"], date.fromisoformat(x["fecha_inicio"]),
                 date.fromisoformat(x["fecha_fin"]), x["activo"]))
         for x in d["usuarios"]:
-            datos = (x["id"], x["nombre"], x["apellido"], x["correo"],
-                     x["cedula"], x["especialidad"], x["horas_max_semana"])
-            # Según el 'tipo' guardado, se crea la clase correcta. [POLIMORFISMO]
-            if x["tipo"] == "COORDINADOR":
-                admin.registrar_usuario(CoordinadorAcademico(*datos, x["carrera"]))
-            else:
-                admin.registrar_usuario(Docente(*datos))
+            # [PATRÓN: Factory Method] [SOLID-O] Antes: if tipo == "COORDINADOR" ...
+            # else Docente. Ahora el creador del rol decide qué clase crear; un rol
+            # nuevo solo agrega un creador, sin editar este bucle.
+            creador_para(x["tipo"]).registrar(admin, x)
         for x in d["sesiones"]:
             # Se vuelven a buscar los objetos reales a partir de los IDs guardados.
             sesion = SesionClase(
@@ -171,6 +185,8 @@ class AlmacenJSON(Almacenamiento):
             if sesion.estado == EstadoSesion.APROBADA:
                 # Las horas del docente se recalculan, así nunca quedan inconsistentes.
                 sesion.docente.asignar_horas(sesion.get_duracion_horas())
+        for codigo in no_disponibles:   # ahora sí: se restaura el estado de las aulas
+            sistema.buscar_aula(codigo).cambiar_disponibilidad(False)
         return sistema
 
     def respaldar_danado(self) -> Path:
