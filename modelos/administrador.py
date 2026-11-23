@@ -5,6 +5,14 @@ usuarios, pero con funciones distintas. Un administrador NO es docente.
 
 Como el diagrama no tiene una clase "repositorio", el administrador guarda
 los registros (usuarios, períodos, aulas, asignaturas) en listas privadas.
+
+Etiquetas de esta entrega (ver README.md):
+  [U2-HERENCIA]        Administrador hereda de la clase abstracta Usuario y debe
+                       implementar get_rol() (polimorfismo con clase abstracta).
+  [SOLID-S]            solo administra los registros generales.
+  [PATRÓN: Factory Method] registrar_usuario() recibe el Usuario YA creado por un
+                       CreadorUsuario (modelos/fabrica_usuarios.py); el
+                       administrador no decide qué clase de usuario crear.
 """
 from __future__ import annotations
 
