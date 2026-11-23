@@ -1,4 +1,4 @@
-"""SistemaAcademico: la LÓGICA que une todas las clases.
+"""SistemaAcademico: la LÓGICA que une todas las clases.  [MODIFICADO]
 
 Cada clase de modelos/ sabe hacer lo suyo (una Sesion detecta conflictos, un
 Coordinador aprueba...), pero alguien tiene que COORDINARLAS: guardar la lista
@@ -6,24 +6,45 @@ de sesiones, buscar objetos por ID, comprobar que exista un período activo...
 Eso es lo que hace esta clase.
 
 NO pide datos ni imprime nada (eso es del menú) y NO sabe de archivos (eso es
-del almacén). Así cada clase tiene UNA sola responsabilidad (principio SRP).
+del almacén).
+
+Qué se aplicó aquí (busca las etiquetas en el código):
+  [PATRÓN: Facade]            esta clase es la "puerta única" del sistema: el menú
+                              no necesita conocer a las demás clases.
+  [PATRÓN: Builder]           crear_sesion() arma la sesión con un ConstructorSesion.
+  [PATRÓN: Prototype]         duplicar_sesion() clona una sesión existente.
+  [PATRÓN: Factory Method]    registrar_docente() crea el usuario con un CreadorUsuario.
+  [U2-INYECCIÓN-DEPENDENCIAS] las reglas y el constructor se RECIBEN en __init__.
+  [SOLID-S/O/D]               las validaciones salieron a servicios/reglas.py.
 """
 from __future__ import annotations
 
 from datetime import date, time
-from typing import Optional
+from typing import Optional, Sequence
 
 from modelos import (Administrador, Asignatura, Aula, AulaClasificacion,
+                     ConstructorSesion, ConstructorSesionClase,
                      CoordinadorAcademico, DiaSemana, Docente, Periodo,
-                     ReporteHorario, SesionClase)
+                     Reporte, SesionClase, creador_para)
+
+from .reglas import ReglaSesion, reglas_por_defecto
 
 
 class SistemaAcademico:
     def __init__(self, admin: Optional[Administrador] = None,
-                 con_clasificaciones_base: bool = True):
-        # Si no se entrega un administrador, se crea uno por defecto.
+                 con_clasificaciones_base: bool = True,
+                 reglas: Optional[Sequence[ReglaSesion]] = None,
+                 constructor_sesion: Optional[ConstructorSesion] = None):
+        # [U2-INYECCIÓN-DEPENDENCIAS] Las dependencias (administrador, reglas y
+        # constructor de sesiones) LLEGAN desde afuera. Si no se entregan, se usan
+        # valores por defecto. Antes las comprobaciones estaban escritas aquí dentro.
+        # [SOLID-D] Se depende de las abstracciones ReglaSesion y ConstructorSesion.
         self._admin = admin or Administrador(
             0, "Administrador", "Sistema", "admin@kmdm.edu.ec", "ADM-001")
+        self._reglas: list[ReglaSesion] = (
+            list(reglas) if reglas is not None else reglas_por_defecto())
+        self._constructor_sesion: ConstructorSesion = (
+            constructor_sesion if constructor_sesion is not None else ConstructorSesionClase())
         self._clasificaciones: list[AulaClasificacion] = []
         if con_clasificaciones_base:
             # Dos tipos de aula listos para usar desde el primer arranque.
@@ -125,10 +146,12 @@ class SistemaAcademico:
                           especialidad: str, horas_max_semana: int) -> Docente:
         # ID automático: el mayor existente + 1.
         nuevo_id = max((u.id for u in self._admin.usuarios), default=0) + 1
-        docente = Docente(nuevo_id, nombre, apellido, correo, cedula,
-                          especialidad, horas_max_semana)
-        self._admin.registrar_usuario(docente)
-        return docente
+        datos = {"id": nuevo_id, "nombre": nombre, "apellido": apellido,
+                 "correo": correo, "cedula": cedula, "especialidad": especialidad,
+                 "horas_max_semana": horas_max_semana}
+        # [PATRÓN: Factory Method] El creador del rol DOCENTE decide qué clase
+        # instanciar y registra al usuario; aquí ya no se escribe Docente(...).
+        return creador_para("DOCENTE").registrar(self._admin, datos)
 
     def designar_coordinador(self, id_docente: int, carrera: str) -> CoordinadorAcademico:
         docente = self.buscar_docente(id_docente)
@@ -175,20 +198,48 @@ class SistemaAcademico:
         docente = self.buscar_docente(id_docente)
         aula = self.buscar_aula(codigo_aula)
         nuevo_id = max((s.id for s in self._sesiones), default=0) + 1
-        # El constructor de SesionClase valida horas, cupo, disponibilidad y
-        # compatibilidad aula-asignatura.
-        sesion = SesionClase(nuevo_id, dia, inicio, fin, cupo,
-                             asignatura, docente, aula, periodo)
-        if not sesion.cumple_capacidad():
-            raise ValueError(f"El aula {aula.codigo} tiene capacidad para "
-                             f"{aula.capacidad}, menor al cupo de {cupo}")
-        # Se compara la sesión nueva con TODAS las existentes (esto solo puede
-        # hacerlo quien conoce la lista completa: esta clase).
-        for otra in self._sesiones:
-            if sesion.hay_conflicto_con(otra):
-                raise ValueError(f"Conflicto de horario con la sesión {otra.id}: {otra}")
+        # [PATRÓN: Builder] La sesión se arma paso a paso con nombres claros, en
+        # lugar de un constructor de 9 parámetros posicionales. obtener_sesion()
+        # valida horas, cupo, disponibilidad y compatibilidad aula-asignatura.
+        sesion = (self._constructor_sesion.reset()
+                  .establecer_id(nuevo_id)
+                  .establecer_horario(dia, inicio, fin)
+                  .establecer_cupo(cupo)
+                  .establecer_asignatura(asignatura)
+                  .establecer_docente(docente)
+                  .establecer_aula(aula)
+                  .establecer_periodo(periodo)
+                  .obtener_sesion())
+        self._validar_nueva(sesion)
         self._sesiones.append(sesion)
         return sesion
+
+    def duplicar_sesion(self, id_sesion: int, dia: DiaSemana,
+                        inicio: Optional[time] = None,
+                        fin: Optional[time] = None) -> SesionClase:
+        """[NUEVO] Copia una sesión existente a otro día (y opcionalmente otras horas).
+
+        [PATRÓN: Prototype] La sesión original actúa como prototipo: se CLONA con
+        clonar() y solo se cambia lo necesario, en lugar de pedir otra vez los 9
+        datos. El clon nace en BORRADOR (una copia de una sesión aprobada NO está
+        aprobada) y se crea en el período ACTIVO.
+        """
+        original = self.buscar_sesion(id_sesion)
+        nuevo_id = max((s.id for s in self._sesiones), default=0) + 1
+        clon = original.clonar(nuevo_id, dia=dia, hora_inicio=inicio, hora_fin=fin,
+                               periodo=self.periodo_activo())
+        self._validar_nueva(clon)   # el clon pasa por las MISMAS reglas que una sesión nueva
+        self._sesiones.append(clon)
+        return clon
+
+    def _validar_nueva(self, sesion: SesionClase) -> None:
+        """Aplica todas las reglas inyectadas. [U2-POLIMORFISMO-INTERFACES]
+
+        Se llama a validar() en cada regla sin saber de qué clase es: cada una
+        responde a su manera. [SOLID-O] Una regla nueva no obliga a editar este método.
+        """
+        for regla in self._reglas:
+            regla.validar(sesion, self._sesiones)
 
     def restaurar_sesion(self, sesion: SesionClase) -> None:
         """Agrega una sesión ya validada (se usa al cargar desde archivo)."""
@@ -214,6 +265,14 @@ class SistemaAcademico:
     def sesiones_pendientes(self) -> list[SesionClase]:
         return [s for s in self._sesiones if s.estado.name == "BORRADOR"]
 
-    def generar_reporte(self, id_coordinador: int, id_periodo: int) -> ReporteHorario:
+    # ---------- reportes ----------
+    # [U2-POLIMORFISMO-ABSTRACTAS] Ambos métodos devuelven un 'Reporte' (clase
+    # abstracta); quien los llama los trata igual aunque sean de tipos distintos.
+    def generar_reporte(self, id_coordinador: int, id_periodo: int) -> Reporte:
         coord = self.buscar_coordinador(id_coordinador)
         return coord.generar_reporte(self.buscar_periodo(id_periodo), list(self._sesiones))
+
+    def generar_reporte_carga(self, id_coordinador: int) -> Reporte:
+        """[NUEVO] Reporte de horas aprobadas de cada docente."""
+        coord = self.buscar_coordinador(id_coordinador)
+        return coord.generar_reporte_carga(self.docentes)

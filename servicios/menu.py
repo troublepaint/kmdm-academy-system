@@ -3,15 +3,22 @@
 Aquí NO se decide ninguna regla del negocio: eso lo hace SistemaAcademico.
 Aquí NO se sabe cómo se guardan los datos: eso lo hace el Almacenamiento.
 Esta clase únicamente interactúa con el usuario (RESPONSABILIDAD ÚNICA).
+
+Etiquetas de esta entrega (ver README.md):
+  [SOLID-S]                    solo pide datos y muestra resultados.
+  [SOLID-I]                    depende de AlmacenamientoEscritura (solo guardar).
+  [SOLID-D] [U2-INYECCIÓN-DEPENDENCIAS]  recibe sistema y almacén ya creados.
+  [U2-POLIMORFISMO-ABSTRACTAS] _mostrar_reporte() sirve para CUALQUIER Reporte.
+  [PATRÓN: Prototype]          opción 14 (duplicar sesión).
 """
 from __future__ import annotations
 
 from datetime import date, datetime, time
 from pathlib import Path
 
-from modelos import DiaSemana
+from modelos import DiaSemana, Reporte
 
-from .almacenamiento import Almacenamiento
+from .almacenamiento import AlmacenamientoEscritura
 from .sistema import SistemaAcademico
 
 
@@ -82,11 +89,13 @@ def leer_dia() -> DiaSemana:
 
 # --------------------------------------------------------------------- menú
 class MenuConsola:
-    def __init__(self, sistema: SistemaAcademico, almacen: Almacenamiento,
+    def __init__(self, sistema: SistemaAcademico, almacen: AlmacenamientoEscritura,
                  carpeta_reportes: Path):
-        # INYECCIÓN DE DEPENDENCIAS: el menú RECIBE el sistema y el almacén ya
+        # [U2-INYECCIÓN-DEPENDENCIAS] el menú RECIBE el sistema y el almacén ya
         # creados; no los crea él. Además 'almacen' es del tipo de la INTERFAZ:
-        # funciona con cualquier clase que cumpla el contrato Almacenamiento.
+        # funciona con cualquier clase que cumpla el contrato.
+        # [SOLID-I] El tipo es AlmacenamientoEscritura (solo guardar): el menú no
+        # depende de cargar(), que no usa. [SOLID-D] Depende de una abstracción.
         self._sistema = sistema
         self._almacen = almacen
         self._carpeta_reportes = Path(carpeta_reportes)
@@ -105,6 +114,9 @@ class MenuConsola:
             "10": ("Ver horario de un docente", self._horario_docente),
             "11": ("Ver docentes, aulas, asignaturas y períodos", self._ver_registros),
             "12": ("Generar reporte de horarios", self._generar_reporte),
+            # [NUEVO] Opciones 13 y 14: una opción nueva = una línea aquí. [SOLID-O]
+            "13": ("Generar reporte de carga docente", self._generar_reporte_carga),
+            "14": ("Duplicar una sesión a otro día", self._duplicar_sesion),
         }
 
     def ejecutar(self) -> None:
@@ -267,14 +279,41 @@ class MenuConsola:
             for p in periodos:
                 print(f"  {p.id}. {p.nombre}")
             id_periodo = leer_entero("ID del período")
-        reporte = self._sistema.generar_reporte(id_coord, id_periodo)
+        self._mostrar_reporte(self._sistema.generar_reporte(id_coord, id_periodo))
+
+    def _generar_reporte_carga(self) -> None:
+        """[NUEVO] Otro tipo de reporte; se muestra con el MISMO código de arriba."""
+        self._mostrar_reporte(self._sistema.generar_reporte_carga(self._elegir_coordinador()))
+
+    def _mostrar_reporte(self, reporte: Reporte) -> None:
+        """[U2-POLIMORFISMO-ABSTRACTAS] Recibe un 'Reporte' (clase abstracta) y no
+        sabe si es de horarios o de carga docente: imprimir() y exportar() se
+        comportan según el objeto real. [SOLID-O] Un reporte nuevo no cambia esto."""
         print()
         reporte.imprimir()
         if leer_si_no("\n¿Guardar el reporte como archivo CSV?"):
             self._carpeta_reportes.mkdir(parents=True, exist_ok=True)
-            ruta = self._carpeta_reportes / f"reporte_{reporte.id}.csv"
+            ruta = self._carpeta_reportes / f"reporte_{reporte.id}.{reporte.extension_de('csv')}"
             ruta.write_text(reporte.exportar("csv"), encoding="utf-8")
             print(f"  ✓ Guardado en {ruta}")
+
+    def _duplicar_sesion(self) -> None:
+        """[NUEVO] [PATRÓN: Prototype] Copia una sesión a otro día sin volver a
+        escribir sus datos."""
+        sesiones = sorted(self._sistema.sesiones, key=lambda s: (s.dia.value, s.hora_inicio))
+        if not sesiones:
+            print("  No hay sesiones para duplicar.")
+            return
+        for s in sesiones:
+            print(f"  [{s.id}] {s}")
+        id_sesion = leer_entero("ID de la sesión a duplicar")
+        dia = leer_dia()
+        inicio = fin = None
+        if leer_si_no("¿Cambiar también las horas?"):
+            inicio, fin = leer_hora("Hora de inicio"), leer_hora("Hora de fin")
+        clon = self._sistema.duplicar_sesion(id_sesion, dia, inicio, fin)
+        self._guardar()
+        print(f"\n  ✓ Sesión {clon.id} creada en BORRADOR (copia de {id_sesion}): {clon}")
 
     # ------------------------------------------------------------- ayudas
     def _elegir_coordinador(self) -> int:

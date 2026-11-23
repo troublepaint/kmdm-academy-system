@@ -12,14 +12,22 @@ Conceptos de POO que se demuestran aquí:
   * HERENCIA MULTINIVEL           : CoordinadorAcademico hereda de Docente,
                                     que a su vez hereda de Usuario.
   * POLIMORFISMO                  : get_rol() devuelve algo distinto en cada clase.
+
+Etiquetas de esta entrega (ver README.md):
+  [U2-HERENCIA]                 Usuario -> Docente -> CoordinadorAcademico (3 niveles).
+  [U2-POLIMORFISMO-ABSTRACTAS]  Usuario es abstracta y get_rol() es abstracto.
+  [SOLID-L]                     un CoordinadorAcademico puede usarse donde se pida un
+                                Docente (ver ReporteCargaDocente y demo_solid_patrones.py).
+  [SOLID-S]                     cada clase tiene sus propios datos y reglas.
+  [PATRÓN: Factory Method]      los usuarios se crean con modelos/fabrica_usuarios.py.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from .enums import EstadoSesion
-from .reportes import ReporteHorario
+from .reportes import ReporteCargaDocente, ReporteHorario
 
 # Estos imports se usan SOLO para las anotaciones de tipo. Se ponen dentro de
 # "TYPE_CHECKING" para evitar imports circulares (A importa B y B importa A).
@@ -33,6 +41,10 @@ class Usuario(ABC):
 
     Hereda de ABC, por eso NO se puede hacer Usuario(...) directamente:
     solo se pueden crear objetos de sus subclases concretas.
+
+    [U2-POLIMORFISMO-ABSTRACTAS] Clase abstracta: mezcla métodos ya escritos
+    (get_nombre_completo...) con uno ABSTRACTO (get_rol) que obliga a cada
+    subclase a escribir su versión.
     """
 
     def __init__(self, id_usuario: int, nombre: str, apellido: str, correo: str):
@@ -100,6 +112,8 @@ class Docente(Usuario):
 
     Reutiliza id, nombre, apellido, correo y sus validaciones, y agrega lo
     propio del docente: cédula, especialidad y control de horas.
+
+    [U2-HERENCIA] Herencia simple: Docente reutiliza todo Usuario con super().
     """
 
     def __init__(self, id_usuario: int, nombre: str, apellido: str, correo: str,
@@ -165,6 +179,11 @@ class CoordinadorAcademico(Docente):
     Un coordinador ES un docente (puede dar clases) y además tiene permisos
     para aprobar o rechazar sesiones y generar reportes. Por eso hereda de
     Docente y no de Usuario directamente.
+
+    [U2-HERENCIA] Tercer nivel de la jerarquía (herencia multinivel).
+    [SOLID-L] Principio de sustitución de Liskov: el coordinador NO cambia las
+    reglas de Docente (mismos métodos, mismas condiciones); solo AGREGA
+    aprobar/rechazar/reportes. Por eso se puede usar donde se espera un Docente.
     """
 
     def __init__(self, id_usuario: int, nombre: str, apellido: str, correo: str,
@@ -215,6 +234,17 @@ class CoordinadorAcademico(Docente):
         # INYECCIÓN DE DEPENDENCIAS: las sesiones se le ENTREGAN al reporte
         # por el constructor; el reporte no las busca ni las crea él mismo.
         reporte = ReporteHorario(f"Horario {self._carrera} - {p.nombre}", del_periodo)
+        reporte.generar()
+        return reporte
+
+    def generar_reporte_carga(self, docentes: Iterable[Docente]) -> ReporteCargaDocente:
+        """[NUEVO] Reporte de horas aprobadas de cada docente.
+
+        [U2-INYECCIÓN-DEPENDENCIAS] Los docentes se ENTREGAN por parámetro.
+        [U2-POLIMORFISMO-ABSTRACTAS] Devuelve otro tipo de Reporte (hermano de
+        ReporteHorario): ambos se usan igual desde fuera.
+        """
+        reporte = ReporteCargaDocente(f"Carga docente - {self._carrera}", docentes)
         reporte.generar()
         return reporte
 
