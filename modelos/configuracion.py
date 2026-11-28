@@ -76,10 +76,6 @@ class ConfiguracionSistema:
             raise ValueError("La duración máxima debe ser mayor que 0")
         self._hora_apertura, self._hora_cierre, self._max_horas_sesion = apertura, cierre, maximo
 
-    def restablecer(self) -> None:
-        """Vuelve a los valores iniciales (útil en pruebas: un Singleton guarda estado)."""
-        self._cargar_valores_por_defecto()
-
 
 if __name__ == "__main__":
     # Prueba rápida:  python -m modelos.configuracion

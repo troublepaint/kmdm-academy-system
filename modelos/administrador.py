@@ -20,6 +20,7 @@ from datetime import date
 from typing import Optional
 
 from .academico import Asignatura, Periodo
+from .horarios import siguiente_id
 from .infraestructura import Aula
 from .usuarios import CoordinadorAcademico, Docente, Usuario
 
@@ -105,7 +106,7 @@ class Administrador(Usuario):
 
     def crear_periodo(self, nombre: str, inicio: date, fin: date) -> Periodo:
         """Crea un período nuevo con id automático y lo registra."""
-        nuevo_id = max((p.id for p in self._periodos), default=0) + 1
+        nuevo_id = siguiente_id(self._periodos)   # [REFACTOR] función compartida
         periodo = Periodo(nuevo_id, nombre, inicio, fin)
         self.registrar_periodo(periodo)
         return periodo

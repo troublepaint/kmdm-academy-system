@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Iterable
 
 from .enums import EstadoSesion
 from .reportes import ReporteCargaDocente, ReporteHorario
+from .validaciones import texto_obligatorio
 
 # Estos imports se usan SOLO para las anotaciones de tipo. Se ponen dentro de
 # "TYPE_CHECKING" para evitar imports circulares (A importa B y B importa A).
@@ -59,10 +60,8 @@ class Usuario(ABC):
     # ---- validaciones reutilizables (las heredan todas las subclases) ----
     @staticmethod
     def _validar_texto(valor: str, campo: str) -> str:
-        """Rechaza textos vacíos y quita espacios sobrantes."""
-        if not isinstance(valor, str) or not valor.strip():
-            raise ValueError(f"El campo '{campo}' no puede estar vacío")
-        return valor.strip()
+        """Rechaza textos vacíos y quita espacios sobrantes (usa la validación común)."""
+        return texto_obligatorio(valor, f"El campo '{campo}' no puede estar vacío")
 
     @staticmethod
     def _validar_correo(correo: str) -> str:

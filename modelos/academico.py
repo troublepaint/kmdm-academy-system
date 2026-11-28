@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from .validaciones import texto_obligatorio
+
 
 class Asignatura:
     """Una materia: código, nombre, nivel y sus horas de teoría y práctica."""
@@ -15,10 +17,9 @@ class Asignatura:
     def __init__(self, codigo: str, nombre: str, nivel: int,
                  horas_teoria: int, horas_practica: int):
         # VALIDACIONES: se revisan los datos antes de guardarlos.
-        if not codigo or not codigo.strip():
-            raise ValueError("El código no puede estar vacío")
-        if not nombre or not nombre.strip():
-            raise ValueError("El nombre no puede estar vacío")
+        # [REFACTOR] texto_obligatorio() reemplaza el 'if not x or not x.strip()' repetido.
+        codigo = texto_obligatorio(codigo, "El código no puede estar vacío")
+        nombre = texto_obligatorio(nombre, "El nombre no puede estar vacío")
         if nivel <= 0:
             raise ValueError("El nivel debe ser mayor que 0")
         if horas_teoria < 0 or horas_practica < 0:
@@ -26,8 +27,8 @@ class Asignatura:
         if horas_teoria + horas_practica == 0:
             raise ValueError("La asignatura debe tener al menos 1 hora")
         # Atributos PRIVADOS (con _): se leen solo con las @property de abajo.
-        self._codigo = codigo.strip()
-        self._nombre = nombre.strip()
+        self._codigo = codigo
+        self._nombre = nombre
         self._nivel = nivel
         self._horas_teoria = horas_teoria
         self._horas_practica = horas_practica
@@ -70,12 +71,11 @@ class Periodo:
 
     def __init__(self, id_periodo: int, nombre: str, fecha_inicio: date,
                  fecha_fin: date, activo: bool = True):
-        if not nombre or not nombre.strip():
-            raise ValueError("El nombre del período no puede estar vacío")
+        nombre = texto_obligatorio(nombre, "El nombre del período no puede estar vacío")
         if fecha_fin < fecha_inicio:
             raise ValueError("La fecha de fin no puede ser anterior a la de inicio")
         self._id = id_periodo
-        self._nombre = nombre.strip()
+        self._nombre = nombre
         self._fecha_inicio = fecha_inicio
         self._fecha_fin = fecha_fin
         self._activo = activo

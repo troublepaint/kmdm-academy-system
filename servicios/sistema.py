@@ -25,7 +25,8 @@ from typing import Optional, Sequence
 from modelos import (Administrador, Asignatura, Aula, AulaClasificacion,
                      ConstructorSesion, ConstructorSesionClase,
                      CoordinadorAcademico, DiaSemana, Docente, Periodo,
-                     Reporte, SesionClase, creador_para)
+                     Reporte, SesionClase, creador_para,
+                     ordenar_por_horario, siguiente_id)
 
 from .reglas import ReglaSesion, reglas_por_defecto
 
@@ -92,11 +93,23 @@ class SistemaAcademico:
         return tuple(self._sesiones)
 
     # ---------- búsquedas: permiten al usuario decir "docente 2" o "aula A-101" ----------
+    @staticmethod
+    def _buscar(elementos, coincide, mensaje_error: str):
+        """[REFACTOR] Recorre 'elementos' y devuelve el primero que cumple 'coincide'.
+        Antes este mismo bucle (for ... if ... return ... raise) estaba copiado en 8 métodos."""
+        for e in elementos:
+            if coincide(e):
+                return e
+        raise ValueError(mensaje_error)
+
+    @staticmethod
+    def _mismo_codigo(a: str, b: str) -> bool:
+        """'a-101' y ' A-101 ' se consideran el mismo código."""
+        return a.lower() == b.strip().lower()
+
     def buscar_docente(self, id_docente: int) -> Docente:
-        for u in self._admin.usuarios:
-            if u.id == id_docente:
-                return u
-        raise ValueError(f"No existe un docente con ID {id_docente}")
+        return self._buscar(self._admin.usuarios, lambda u: u.id == id_docente,
+                            f"No existe un docente con ID {id_docente}")
 
     def buscar_coordinador(self, id_coordinador: int) -> CoordinadorAcademico:
         d = self.buscar_docente(id_coordinador)
@@ -105,47 +118,33 @@ class SistemaAcademico:
         return d
 
     def buscar_aula(self, codigo: str) -> Aula:
-        # .lower() hace que "a-101" y "A-101" se consideren el mismo código.
-        for a in self._admin.aulas:
-            if a.codigo.lower() == codigo.strip().lower():
-                return a
-        raise ValueError(f"No existe un aula con código {codigo!r}")
+        return self._buscar(self._admin.aulas, lambda a: self._mismo_codigo(a.codigo, codigo),
+                            f"No existe un aula con código {codigo!r}")
 
     def buscar_asignatura(self, codigo: str) -> Asignatura:
-        for a in self._admin.asignaturas:
-            if a.codigo.lower() == codigo.strip().lower():
-                return a
-        raise ValueError(f"No existe una asignatura con código {codigo!r}")
+        return self._buscar(self._admin.asignaturas, lambda a: self._mismo_codigo(a.codigo, codigo),
+                            f"No existe una asignatura con código {codigo!r}")
 
     def buscar_periodo(self, id_periodo: int) -> Periodo:
-        for p in self._admin.periodos:
-            if p.id == id_periodo:
-                return p
-        raise ValueError(f"No existe un período con ID {id_periodo}")
+        return self._buscar(self._admin.periodos, lambda p: p.id == id_periodo,
+                            f"No existe un período con ID {id_periodo}")
 
     def buscar_clasificacion(self, id_clasificacion: int) -> AulaClasificacion:
-        for c in self._clasificaciones:
-            if c.id == id_clasificacion:
-                return c
-        raise ValueError(f"No existe una clasificación con ID {id_clasificacion}")
+        return self._buscar(self._clasificaciones, lambda c: c.id == id_clasificacion,
+                            f"No existe una clasificación con ID {id_clasificacion}")
 
     def buscar_sesion(self, id_sesion: int) -> SesionClase:
-        for s in self._sesiones:
-            if s.id == id_sesion:
-                return s
-        raise ValueError(f"No existe una sesión con ID {id_sesion}")
+        return self._buscar(self._sesiones, lambda x: x.id == id_sesion,
+                            f"No existe una sesión con ID {id_sesion}")
 
     def periodo_activo(self) -> Periodo:
-        for p in self._admin.periodos:
-            if p.activo:
-                return p
-        raise ValueError("No hay un período activo. Cree uno primero")
+        return self._buscar(self._admin.periodos, lambda p: p.activo,
+                            "No hay un período activo. Cree uno primero")
 
     # ---------- operaciones del administrador (delegan en él lo que le corresponde) ----------
     def registrar_docente(self, nombre: str, apellido: str, correo: str, cedula: str,
                           especialidad: str, horas_max_semana: int) -> Docente:
-        # ID automático: el mayor existente + 1.
-        nuevo_id = max((u.id for u in self._admin.usuarios), default=0) + 1
+        nuevo_id = siguiente_id(self._admin.usuarios)   # [REFACTOR] ID automático compartido
         datos = {"id": nuevo_id, "nombre": nombre, "apellido": apellido,
                  "correo": correo, "cedula": cedula, "especialidad": especialidad,
                  "horas_max_semana": horas_max_semana}
@@ -197,7 +196,7 @@ class SistemaAcademico:
         asignatura = self.buscar_asignatura(codigo_asignatura)
         docente = self.buscar_docente(id_docente)
         aula = self.buscar_aula(codigo_aula)
-        nuevo_id = max((s.id for s in self._sesiones), default=0) + 1
+        nuevo_id = siguiente_id(self._sesiones)   # [REFACTOR] antes este cálculo estaba repetido
         # [PATRÓN: Builder] La sesión se arma paso a paso con nombres claros, en
         # lugar de un constructor de 9 parámetros posicionales. obtener_sesion()
         # valida horas, cupo, disponibilidad y compatibilidad aula-asignatura.
@@ -225,7 +224,7 @@ class SistemaAcademico:
         aprobada) y se crea en el período ACTIVO.
         """
         original = self.buscar_sesion(id_sesion)
-        nuevo_id = max((s.id for s in self._sesiones), default=0) + 1
+        nuevo_id = siguiente_id(self._sesiones)   # [REFACTOR] antes este cálculo estaba repetido
         clon = original.clonar(nuevo_id, dia=dia, hora_inicio=inicio, hora_fin=fin,
                                periodo=self.periodo_activo())
         self._validar_nueva(clon)   # el clon pasa por las MISMAS reglas que una sesión nueva
@@ -260,7 +259,7 @@ class SistemaAcademico:
         """Sesiones de un docente, ordenadas por día y hora."""
         docente = self.buscar_docente(id_docente)
         propias = [s for s in self._sesiones if s.docente.id == docente.id]
-        return sorted(propias, key=lambda s: (s.dia.value, s.hora_inicio))
+        return ordenar_por_horario(propias)
 
     def sesiones_pendientes(self) -> list[SesionClase]:
         return [s for s in self._sesiones if s.estado.name == "BORRADOR"]

@@ -26,6 +26,7 @@ from modelos import (Administrador, Asignatura, Aula, AulaClasificacion,
                      creador_para)
 
 from .almacenamiento import Almacenamiento
+from .archivos import guardar_json_seguro
 from .sistema import SistemaAcademico
 
 
@@ -55,15 +56,8 @@ class AlmacenJSON(Almacenamiento):
 
     # ------------------------------------------------------------ guardar
     def guardar(self, sistema: SistemaAcademico) -> None:
-        datos = self._a_diccionario(sistema)
-        self._ruta.parent.mkdir(parents=True, exist_ok=True)  # crea la carpeta data/
-        # Se escribe primero en un archivo temporal y luego se reemplaza el
-        # original. Si el programa se cierra a mitad de la escritura, el archivo
-        # bueno no queda a medias.
-        temporal = self._ruta.with_suffix(".tmp")
-        temporal.write_text(json.dumps(datos, ensure_ascii=False, indent=2),
-                            encoding="utf-8")
-        os.replace(temporal, self._ruta)
+        # [REFACTOR] La escritura segura (temporal + reemplazo) es común con las cuentas.
+        guardar_json_seguro(self._ruta, self._a_diccionario(sistema))
 
     @staticmethod
     def _a_diccionario(sistema: SistemaAcademico) -> dict:

@@ -1,43 +1,64 @@
-"""PANTALLAS (vistas) de la interfaz gráfica.  [NUEVO]
+"""PANTALLAS (vistas) de la interfaz gráfica.  [MODIFICADO: ahora son VISTAS PASIVAS de MVP]
 
     VistaBase (clase ABSTRACTA)
     ├── VistaInicio        panel con totales y sesiones pendientes
-    ├── VistaDocentes      registrar docentes y designar coordinadores
-    ├── VistaAulas         registrar aulas y activar/desactivar
-    ├── VistaAsignaturas   registrar asignaturas
-    ├── VistaPeriodos      crear y cerrar períodos
-    ├── VistaSesiones      crear, aprobar, rechazar y duplicar sesiones
+    ├── VistaEstadisticas  indicadores y gráficas
     ├── VistaHorario       cuadrícula semanal (lunes a sábado) por colores
-    └── VistaReportes      reporte de horario / carga docente y exportar CSV
+    ├── VistaReportes      reporte de horario / carga docente y exportar CSV
+    └── VistaConTabla      (base de las pantallas que muestran una tabla)
+        ├── VistaSesiones      crear, aprobar, rechazar y duplicar sesiones
+        ├── VistaDocentes      registrar docentes y designar coordinadores
+        ├── VistaAulas         registrar aulas y activar/desactivar
+        ├── VistaAsignaturas   registrar asignaturas
+        ├── VistaPeriodos      crear y cerrar períodos
+        └── VistaUsuarios      cuentas de acceso
 
-[U2-HERENCIA] Todas las pantallas HEREDAN de VistaBase y reutilizan su
-    encabezado, el manejo de errores y el guardado.
-[U2-POLIMORFISMO-ABSTRACTAS] VistaBase es abstracta: obliga a cada pantalla a
-    escribir _construir() (cómo se dibuja) y actualizar() (cómo se refresca).
-    La ventana principal llama vista.actualizar() sin saber de qué pantalla es.
+[MVP] Cada pantalla tiene UN presentador (relación uno a uno, ver presentadores/):
+    * La VISTA (este archivo) solo DIBUJA widgets y AVISA al presentador lo que hizo el
+      usuario: "pulsó Aprobar con la sesión 3 seleccionada".
+    * El PRESENTADOR decide: llama al modelo, maneja errores, guarda, y le devuelve a la
+      vista los datos ya preparados (filas, textos, números) con métodos como
+      mostrar_filas(), mostrar_error() o mostrar_mensaje().
+    * La vista ya NO usa SistemaAcademico (el modelo) directamente: antes cada pantalla
+      llamaba a self.sistema.xxx(); ahora solo habla con self.presentador.
+  ¿Qué se ganó? La lógica que antes estaba aquí mezclada con tkinter (filtrar, validar,
+  elegir coordinador, contar estados, acomodar el horario...) ahora se puede PROBAR sin
+  abrir ninguna ventana (tests/test_presentadores.py) y se REUTILIZA en el menú de consola.
+
+[U2-HERENCIA] Todas las pantallas HEREDAN de VistaBase y reutilizan su encabezado y la
+    forma de mostrar mensajes, errores y preguntas.
+[U2-POLIMORFISMO-ABSTRACTAS] VistaBase es abstracta: obliga a cada pantalla a escribir
+    _crear_presentador(), _construir() y actualizar(). La ventana principal llama
+    vista.actualizar() sin saber de qué pantalla es.
+[U2-POLIMORFISMO-INTERFACES] Cada vista IMPLEMENTA la interfaz que su presentador espera
+    (IVistaTabla, IVistaInicio, IVistaHorario...).
 [PATRÓN: Template Method] VistaBase.__init__ define el esqueleto (encabezado ->
-    _construir -> actualizar) y ejecutar() el de cada acción (intentar -> guardar
-    -> refrescar todo -> avisar); las pantallas rellenan los pasos variables.
-[U2-INYECCIÓN-DEPENDENCIAS] Cada pantalla RECIBE un Contexto (sistema, tema y
-    funciones de guardar/navegar); no crea ni busca nada por su cuenta.
-[PATRÓN: Facade] La interfaz solo habla con SistemaAcademico, nunca con las reglas
-    internas. [SOLID-D] Depende de esa abstracción de alto nivel.
-[SOLID-S] Las pantallas solo muestran datos y piden datos; TODAS las reglas
-    (conflictos, capacidad, horario...) siguen en el sistema y se muestran como avisos.
+    presentador -> _construir -> actualizar); las pantallas rellenan los pasos.
+    (El Template Method de las ACCIONES pasó a PresentadorBase._ejecutar.)
+[U2-INYECCIÓN-DEPENDENCIAS] Cada pantalla RECIBE un Contexto (sistema, tema, funciones de
+    guardar/navegar) y se lo entrega a su presentador; no crea ni busca nada por su cuenta.
+[SOLID-S] Vista = dibujar; presentador = decidir; modelo = reglas del negocio.
 """
 from __future__ import annotations
 
 import tkinter as tk
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
-from modelos import DiaSemana, Reporte
-from servicios import (ADMINISTRADOR, COORDINADOR, DOCENTE, Autenticador, AutenticadorLocal,
-                       Cuenta, EstadisticasHorario, SistemaAcademico)
+from modelos import DiaSemana, minutos_del_dia
+from presentadores import (BloqueHorario, Fila, IVistaDialogos, IVistaEstadisticas,
+                           IVistaHorario, IVistaInicio, IVistaReportes, IVistaTabla,
+                           PresentadorAsignaturas, PresentadorAulas, PresentadorDocentes,
+                           PresentadorEstadisticas, PresentadorHorario, PresentadorInicio,
+                           PresentadorPeriodos, PresentadorReportes, PresentadorSesiones,
+                           PresentadorUsuarios)
+from servicios import (ADMINISTRADOR, COORDINADOR, DOCENTE, Autenticador, Cuenta,
+                       SistemaAcademico)
 
-from .componentes import Campo, Encabezado, Hero, Tabla, TarjetaDato, pedir_datos
+from .componentes import (Campo, Encabezado, Hero, Tabla, TarjetaDato, llenar_combo,
+                          pedir_datos, recortar_texto)
 from .graficos import GraficoBarras, GraficoDona, GraficoProgreso
 from .imagenes import Imagenes
 from .tema import COLOR_ESTADO, COLORES, Tema
@@ -45,27 +66,32 @@ from .tema import COLOR_ESTADO, COLORES, Tema
 
 @dataclass
 class Contexto:
-    """[U2-INYECCIÓN-DEPENDENCIAS] Todo lo que una pantalla necesita, entregado desde afuera."""
-    sistema: SistemaAcademico
+    """[U2-INYECCIÓN-DEPENDENCIAS] Todo lo que una pantalla (y su presentador) necesita,
+    entregado desde afuera por la ventana principal."""
+    sistema: SistemaAcademico              # el MODELO: lo usa el presentador, no la vista
     tema: Tema
     guardar: Callable[[], None]
     notificar_cambio: Callable[[], None]   # refresca TODAS las pantallas
     mensaje: Callable[[str], None]         # texto de la barra inferior
     navegar: Callable[[str], None]         # cambia de pantalla por su clave
-    cuenta: Cuenta = None                  # [NUEVO] quién inició sesión (rol y docente)
-    imagenes: Imagenes = None              # [NUEVO] imágenes PNG ya cargadas
-    autenticador: Autenticador = None      # [NUEVO] para crear cuentas y cambiar claves
+    cuenta: Cuenta = None                  # quién inició sesión (rol y docente)
+    imagenes: Imagenes = None              # imágenes PNG ya cargadas
+    autenticador: Autenticador = None      # para crear cuentas y cambiar claves
 
 
 # =================================================================== clase base
-class VistaBase(ttk.Frame, ABC):
-    """[U2-POLIMORFISMO-ABSTRACTAS] Plantilla común de todas las pantallas."""
+class VistaBase(ttk.Frame, IVistaDialogos):
+    """[U2-POLIMORFISMO-ABSTRACTAS] Plantilla común de todas las pantallas.
+
+    Implementa, UNA sola vez para todas, los métodos de IVistaDialogos que usan los
+    presentadores (mostrar_mensaje, mostrar_error, avisar, confirmar, elegir, pedir_texto).
+    """
 
     clave = ""
     titulo = ""
     subtitulo = ""
-    icono = ""                                       # [NUEVO] nombre del icono de la barra lateral
-    roles = (ADMINISTRADOR, COORDINADOR, DOCENTE)    # [NUEVO] quién puede ver esta pantalla
+    icono = ""                                       # nombre del icono de la barra lateral
+    roles = (ADMINISTRADOR, COORDINADOR, DOCENTE)    # quién puede ver esta pantalla
 
     def __init__(self, master, ctx: Contexto):
         t = ctx.tema
@@ -73,15 +99,23 @@ class VistaBase(ttk.Frame, ABC):
         self.ctx = ctx
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        # [PATRÓN: Template Method] esqueleto fijo: encabezado -> _construir -> actualizar
+        # [PATRÓN: Template Method] esqueleto fijo: encabezado -> presentador -> _construir -> actualizar
         self.encabezado = Encabezado(self, t, self.titulo, self.subtitulo)
         self.encabezado.grid(row=0, column=0, sticky="ew", pady=(0, t.px(12)))
         self.cuerpo = ttk.Frame(self)
         self.cuerpo.grid(row=1, column=0, sticky="nsew")
         self.cuerpo.columnconfigure(0, weight=1)
         self.cuerpo.rowconfigure(0, weight=1)
+        # [MVP] El presentador se crea ANTES de los widgets: _construir() puede pedirle
+        # datos (por ejemplo, las opciones de un filtro).
+        self.presentador = self._crear_presentador()
         self._construir()
         self.actualizar()
+
+    # ------------------------------------------------------------ pasos que cada pantalla escribe
+    @abstractmethod
+    def _crear_presentador(self):
+        """Crea el presentador de esta pantalla (relación uno a uno)."""
 
     @abstractmethod
     def _construir(self) -> None:
@@ -89,68 +123,54 @@ class VistaBase(ttk.Frame, ABC):
 
     @abstractmethod
     def actualizar(self) -> None:
-        """Vuelve a leer el sistema y redibuja los datos."""
+        """Pide al presentador que vuelva a cargar los datos."""
 
-    # ------------------------------------------------------------ ayudas comunes
-    @property
-    def sistema(self) -> SistemaAcademico:
-        return self.ctx.sistema
+    def _dependencias(self) -> dict:
+        """Lo que todos los presentadores reciben además de la vista y el modelo."""
+        return {"guardar": self.ctx.guardar, "al_cambiar": self.ctx.notificar_cambio,
+                "cuenta": self.ctx.cuenta}
 
+    # ------------------------------------------------------------ IVista / IVistaDialogos
+    def mostrar_mensaje(self, texto: str) -> None:
+        self.ctx.mensaje(texto)
+
+    def mostrar_error(self, texto: str) -> None:
+        messagebox.showerror("No se pudo completar", texto, parent=self)
+
+    def avisar(self, texto: str, titulo: str = "Atención") -> None:
+        messagebox.showinfo(titulo, texto, parent=self)
+
+    def confirmar(self, pregunta: str) -> bool:
+        return messagebox.askyesno(self.titulo or "Confirmar", pregunta, parent=self)
+
+    def elegir(self, titulo: str, opciones: Sequence[tuple[str, Any]]) -> Optional[Any]:
+        datos = self._pedir(titulo, [Campo("valor", "Opción", "opcion", list(opciones))], "Continuar")
+        return datos["valor"] if datos else None
+
+    def pedir_texto(self, titulo: str, etiqueta: str) -> Optional[str]:
+        datos = self._pedir(titulo, [Campo("texto", etiqueta)], "Aceptar")
+        return datos["texto"] if datos else None
+
+    # ------------------------------------------------------------ ayudas de dibujo
     def _pedir(self, titulo: str, campos, aceptar: str = "Guardar") -> Optional[dict]:
         return pedir_datos(self, self.ctx.tema, titulo, campos, aceptar)
 
-    def ejecutar(self, accion: Callable[[], object], mensaje_ok: str,
-                 cambia_datos: bool = True) -> tuple:
-        """[PATRÓN: Template Method] Pasos fijos de toda acción: intentar -> guardar ->
-        refrescar -> avisar. Si el sistema rechaza algo (ValueError/PermissionError),
-        se muestra el motivo en una ventana y NADA se guarda."""
-        try:
-            resultado = accion()
-        except (ValueError, PermissionError) as error:
-            messagebox.showerror("No se pudo completar", str(error), parent=self)
-            return False, None
-        if cambia_datos:
-            self.ctx.guardar()
-            self.ctx.notificar_cambio()
-        self.ctx.mensaje(mensaje_ok)
-        return True, resultado
-
-    def _avisar(self, texto: str, titulo: str = "Atención") -> None:
-        messagebox.showinfo(titulo, texto, parent=self)
-
     def _seleccion_de(self, tabla: Tabla, que: str) -> Optional[str]:
+        """Fila elegida en la tabla; si no hay, avisa. (Leer la selección es trabajo de la vista.)"""
         elegido = tabla.seleccion()
         if elegido is None:
-            self._avisar(f"Seleccione {que} en la tabla.")
+            self.avisar(f"Seleccione {que} en la tabla.")
         return elegido
 
-    def _elegir_coordinador(self) -> Optional[int]:
-        """Si hay un solo coordinador lo usa; si hay varios, pregunta cuál."""
-        cuenta = self.ctx.cuenta
-        if cuenta is not None and cuenta.rol == COORDINADOR:
-            return cuenta.id_docente           # un coordinador actúa siempre como él mismo
-        coordinadores = self.sistema.coordinadores
-        if not coordinadores:
-            self._avisar("No hay coordinadores. Primero designe uno en la pantalla Docentes.")
-            return None
-        if len(coordinadores) == 1:
-            return coordinadores[0].id
-        datos = self._pedir("¿Qué coordinador realiza la acción?", [
-            Campo("id", "Coordinador", "opcion",
-                  [(f"{c.get_nombre_completo()} ({c.carrera})", c.id) for c in coordinadores])],
-            "Continuar")
-        return datos["id"] if datos else None
 
+class VistaConTabla(VistaBase, IVistaTabla):
+    """[REFACTOR] Base de las pantallas que muestran una tabla: así 'mostrar_filas'
+    se escribe una sola vez en lugar de repetirse en seis pantallas."""
 
-def _fila_sesion(s) -> tuple:
-    """Convierte una SesionClase en una fila de tabla (coloreada por su estado)."""
-    return (s.id, (s.id, s.dia.name.capitalize(), f"{s.hora_inicio:%H:%M} - {s.hora_fin:%H:%M}",
-                   s.asignatura.codigo, s.docente.get_nombre_completo(), s.aula.codigo,
-                   s.cupo, s.estado.name.capitalize(), s.motivo_rechazo or ""), s.estado.name)
+    _tabla: Tabla
 
-
-def _ordenar(sesiones):
-    return sorted(sesiones, key=lambda s: (s.dia.value, s.hora_inicio))
+    def mostrar_filas(self, filas: Sequence[Fila]) -> None:
+        self._tabla.cargar(filas)
 
 
 COLUMNAS_SESION = [("id", "ID", 45, "center"), ("dia", "Día", 85, "w"),
@@ -161,20 +181,22 @@ COLUMNAS_SESION = [("id", "ID", 45, "center"), ("dia", "Día", 85, "w"),
 
 
 # ====================================================================== inicio
-class VistaInicio(VistaBase):
+class VistaInicio(VistaBase, IVistaInicio):
     clave, titulo = "inicio", "Inicio"
     subtitulo = "Resumen del sistema"
     icono = "inicio"
+
+    def _crear_presentador(self) -> PresentadorInicio:
+        return PresentadorInicio(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         t, img = self.ctx.tema, self.ctx.imagenes
         self.cuerpo.rowconfigure(0, weight=0)
         self.cuerpo.rowconfigure(3, weight=1)
-        # [NUEVO] Franja de bienvenida con imagen en lugar del encabezado simple.
+        # Franja de bienvenida con imagen en lugar del encabezado simple.
         self.encabezado.grid_remove()
         self._hero = Hero(self, t, img.hero() if img else None)
         self._hero.grid(row=0, column=0, sticky="ew", pady=(0, t.px(12)))
-        self._periodo = ttk.Label(self.cuerpo, font=t.f_negrita)   # (solo guarda el texto; el Hero lo muestra)
         self._rejilla = ttk.Frame(self.cuerpo)
         self._rejilla.grid(row=1, column=0, sticky="ew")
         ic = (lambda n: img.icono(n)) if img else (lambda n: None)
@@ -196,7 +218,7 @@ class VistaInicio(VistaBase):
         if self.ctx.cuenta is None or self.ctx.cuenta.rol != DOCENTE:
             ttk.Button(cab, text="Ir a Sesiones", style="Suave.TButton",
                        command=lambda: self.ctx.navegar("sesiones")).grid(row=0, column=1)
-        self._tabla = Tabla(self.cuerpo, t, [c for c in COLUMNAS_SESION if c[0] != "motivo" and c[0] != "estado"])
+        self._tabla = Tabla(self.cuerpo, t, [c for c in COLUMNAS_SESION if c[0] not in ("motivo", "estado")])
         self._tabla.grid(row=3, column=0, sticky="nsew")
 
     def _reacomodar(self, _evento=None) -> None:
@@ -214,32 +236,26 @@ class VistaInicio(VistaBase):
                          padx=t.px(4), pady=t.px(4))
 
     def actualizar(self) -> None:
-        s = self.sistema
-        try:
-            p = s.periodo_activo()
-            texto = f"Período activo: {p.nombre}   ({p.fecha_inicio} a {p.fecha_fin})"
-        except ValueError:
-            texto = "No hay período activo."
-        self._periodo.configure(text=texto)
-        cuenta = self.ctx.cuenta
-        if cuenta is not None:
-            self._hero.poner(f"¡Hola, {cuenta.nombre.split()[0]}!",
-                             f"{cuenta.rol.capitalize()}  ·  {texto}")
-        estados = [x.estado.name for x in s.sesiones]
-        valores = {"docentes": len(s.docentes), "coord": len(s.coordinadores), "aulas": len(s.aulas),
-                   "asig": len(s.asignaturas), "sesiones": len(estados),
-                   "pend": estados.count("BORRADOR"), "aprob": estados.count("APROBADA")}
-        for clave, valor in valores.items():
+        self.presentador.cargar()
+
+    # [MVP] El presentador entrega los textos y números ya calculados; aquí solo se pintan.
+    def mostrar_resumen(self, saludo: str, detalle: str, totales: dict[str, int],
+                        pendientes: Sequence[Fila]) -> None:
+        self._hero.poner(saludo, detalle)
+        for clave, valor in totales.items():
             self._tarjetas[clave].poner(valor)
-        self._tabla.cargar([_fila_sesion(x) for x in _ordenar(s.sesiones_pendientes())])
+        self._tabla.cargar(pendientes)
 
 
 # =================================================================== docentes
-class VistaDocentes(VistaBase):
+class VistaDocentes(VistaConTabla):
     clave, titulo = "docentes", "Docentes"
     subtitulo = "Registro de docentes y coordinadores académicos"
     icono = "docentes"
     roles = (ADMINISTRADOR,)
+
+    def _crear_presentador(self) -> PresentadorDocentes:
+        return PresentadorDocentes(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         self.encabezado.agregar_boton("Designar coordinador", self._designar)
@@ -251,14 +267,7 @@ class VistaDocentes(VistaBase):
         self._tabla.grid(row=0, column=0, sticky="nsew")
 
     def actualizar(self) -> None:
-        filas = []
-        for d in self.sistema.docentes:
-            # [U2-POLIMORFISMO] get_rol() responde DOCENTE o COORDINADOR según el objeto real.
-            filas.append((d.id, (d.id, d.get_nombre_completo(), d.especialidad, d.get_rol().capitalize(),
-                                 f"{d.horas_asignadas:g} / {d.horas_max_semana} h",
-                                 getattr(d, "carrera", "—")),
-                          "APROBADA" if d.get_rol() == "COORDINADOR" else None))
-        self._tabla.cargar(filas)
+        self.presentador.cargar()
 
     def _nuevo(self) -> None:
         datos = self._pedir("Nuevo docente", [
@@ -266,9 +275,8 @@ class VistaDocentes(VistaBase):
             Campo("cedula", "Cédula"), Campo("esp", "Especialidad"),
             Campo("horas", "Horas máximas por semana", "entero", inicial="20")])
         if datos:
-            self.ejecutar(lambda: self.sistema.registrar_docente(
-                datos["nombre"], datos["apellido"], datos["correo"], datos["cedula"],
-                datos["esp"], datos["horas"]), "Docente registrado")
+            self.presentador.registrar(datos["nombre"], datos["apellido"], datos["correo"],
+                                       datos["cedula"], datos["esp"], datos["horas"])
 
     def _designar(self) -> None:
         elegido = self._seleccion_de(self._tabla, "un docente")
@@ -276,16 +284,18 @@ class VistaDocentes(VistaBase):
             return
         datos = self._pedir("Designar coordinador", [Campo("carrera", "Carrera que coordinará")], "Designar")
         if datos:
-            self.ejecutar(lambda: self.sistema.designar_coordinador(int(elegido), datos["carrera"]),
-                          "Coordinador designado")
+            self.presentador.designar_coordinador(int(elegido), datos["carrera"])
 
 
 # ====================================================================== aulas
-class VistaAulas(VistaBase):
+class VistaAulas(VistaConTabla):
     clave, titulo = "aulas", "Aulas"
     subtitulo = "Espacios donde se dictan las clases"
     icono = "aulas"
     roles = (ADMINISTRADOR,)
+
+    def _crear_presentador(self) -> PresentadorAulas:
+        return PresentadorAulas(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         self.encabezado.agregar_boton("Activar / desactivar", self._alternar)
@@ -296,39 +306,32 @@ class VistaAulas(VistaBase):
         self._tabla.grid(row=0, column=0, sticky="nsew")
 
     def actualizar(self) -> None:
-        self._tabla.cargar([
-            (a.codigo, (a.codigo, a.nombre, a.capacidad, a.ubicacion, a.clasificacion.nombre,
-                        "Disponible" if a.esta_disponible() else "No disponible"),
-             None if a.esta_disponible() else "RECHAZADA") for a in self.sistema.aulas])
+        self.presentador.cargar()
 
     def _nueva(self) -> None:
         datos = self._pedir("Nueva aula", [
             Campo("codigo", "Código (ej. A-101)"), Campo("nombre", "Nombre"),
             Campo("cap", "Capacidad (estudiantes)", "entero"), Campo("ubic", "Ubicación"),
-            Campo("clas", "Tipo de aula", "opcion",
-                  [(c.nombre, c.id) for c in self.sistema.clasificaciones])])
+            Campo("clas", "Tipo de aula", "opcion", self.presentador.opciones_clasificacion())])
         if datos:
-            self.ejecutar(lambda: self.sistema.registrar_aula(
-                datos["codigo"], datos["nombre"], datos["cap"], datos["ubic"], datos["clas"]),
-                "Aula registrada")
+            self.presentador.registrar(datos["codigo"], datos["nombre"], datos["cap"],
+                                       datos["ubic"], datos["clas"])
 
     def _alternar(self) -> None:
         elegido = self._seleccion_de(self._tabla, "un aula")
-        if elegido is None:
-            return
-
-        def cambiar():
-            aula = self.sistema.buscar_aula(elegido)
-            aula.cambiar_disponibilidad(not aula.esta_disponible())
-        self.ejecutar(cambiar, "Disponibilidad del aula actualizada")
+        if elegido is not None:
+            self.presentador.alternar_disponibilidad(elegido)
 
 
 # =============================================================== asignaturas
-class VistaAsignaturas(VistaBase):
+class VistaAsignaturas(VistaConTabla):
     clave, titulo = "asignaturas", "Asignaturas"
     subtitulo = "Materias con sus horas de teoría y práctica"
     icono = "asignaturas"
     roles = (ADMINISTRADOR,)
+
+    def _crear_presentador(self) -> PresentadorAsignaturas:
+        return PresentadorAsignaturas(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         self.encabezado.agregar_boton("+ Nueva asignatura", self._nueva, "Acento.TButton")
@@ -339,9 +342,7 @@ class VistaAsignaturas(VistaBase):
         self._tabla.grid(row=0, column=0, sticky="nsew")
 
     def actualizar(self) -> None:
-        self._tabla.cargar([(a.codigo, (a.codigo, a.nombre, a.nivel, a.horas_teoria,
-                                        a.horas_practica, a.get_horas_totales()), None)
-                            for a in self.sistema.asignaturas])
+        self.presentador.cargar()
 
     def _nueva(self) -> None:
         datos = self._pedir("Nueva asignatura", [
@@ -349,20 +350,22 @@ class VistaAsignaturas(VistaBase):
             Campo("teo", "Horas de teoría", "entero", minimo=0, inicial="3"),
             Campo("pra", "Horas de práctica", "entero", minimo=0, inicial="0")])
         if datos:
-            self.ejecutar(lambda: self.sistema.registrar_asignatura(
-                datos["cod"], datos["nombre"], datos["nivel"], datos["teo"], datos["pra"]),
-                "Asignatura registrada")
+            self.presentador.registrar(datos["cod"], datos["nombre"], datos["nivel"],
+                                       datos["teo"], datos["pra"])
 
 
 # ================================================================== períodos
-class VistaPeriodos(VistaBase):
+class VistaPeriodos(VistaConTabla):
     clave, titulo = "periodos", "Períodos"
     subtitulo = "Solo puede haber un período académico activo a la vez"
     icono = "periodos"
     roles = (ADMINISTRADOR,)
 
+    def _crear_presentador(self) -> PresentadorPeriodos:
+        return PresentadorPeriodos(self, self.ctx.sistema, **self._dependencias())
+
     def _construir(self) -> None:
-        self.encabezado.agregar_boton("Cerrar período activo", self._cerrar)
+        self.encabezado.agregar_boton("Cerrar período activo", self.presentador.cerrar_activo)
         self.encabezado.agregar_boton("+ Nuevo período", self._nuevo, "Acento.TButton")
         self._tabla = Tabla(self.cuerpo, self.ctx.tema, [
             ("id", "ID", 45, "center"), ("nombre", "Nombre", 160, "w"), ("ini", "Inicio", 110, "center"),
@@ -370,35 +373,25 @@ class VistaPeriodos(VistaBase):
         self._tabla.grid(row=0, column=0, sticky="nsew")
 
     def actualizar(self) -> None:
-        self._tabla.cargar([(p.id, (p.id, p.nombre, p.fecha_inicio, p.fecha_fin,
-                                    "Activo" if p.activo else "Cerrado"),
-                             "APROBADA" if p.activo else None) for p in self.sistema.periodos])
+        self.presentador.cargar()
 
     def _nuevo(self) -> None:
         datos = self._pedir("Nuevo período académico", [
             Campo("nombre", "Nombre (ej. 2026-2)"), Campo("ini", "Fecha de inicio (AAAA-MM-DD)", "fecha"),
             Campo("fin", "Fecha de fin (AAAA-MM-DD)", "fecha")])
         if datos:
-            self.ejecutar(lambda: self.sistema.crear_periodo(datos["nombre"], datos["ini"], datos["fin"]),
-                          "Período creado")
-
-    def _cerrar(self) -> None:
-        try:
-            activo = self.sistema.periodo_activo()
-        except ValueError as e:
-            self._avisar(str(e))
-            return
-        if messagebox.askyesno("Cerrar período", f"¿Cerrar el período {activo.nombre}?", parent=self):
-            self.ejecutar(self.sistema.cerrar_periodo_activo, f"Período {activo.nombre} cerrado")
+            self.presentador.crear(datos["nombre"], datos["ini"], datos["fin"])
 
 
 # =================================================================== sesiones
-class VistaSesiones(VistaBase):
+class VistaSesiones(VistaConTabla):
     clave, titulo = "sesiones", "Sesiones de clase"
     subtitulo = "Cree sesiones en borrador y el coordinador las aprueba o rechaza"
     icono = "sesiones"
     roles = (ADMINISTRADOR, COORDINADOR)
-    TODAS = "Todas"
+
+    def _crear_presentador(self) -> PresentadorSesiones:
+        return PresentadorSesiones(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         t = self.ctx.tema
@@ -412,7 +405,7 @@ class VistaSesiones(VistaBase):
         filtro.grid(row=0, column=0, sticky="w", pady=(0, t.px(8)))
         ttk.Label(filtro, text="Estado:").pack(side="left", padx=(0, t.px(6)))
         self._estado = ttk.Combobox(filtro, state="readonly", width=14,
-                                    values=[self.TODAS, "Borrador", "Aprobada", "Rechazada"])
+                                    values=list(PresentadorSesiones.FILTROS))
         self._estado.current(0)
         self._estado.pack(side="left")
         self._estado.bind("<<ComboboxSelected>>", lambda _e: self.actualizar())
@@ -420,60 +413,33 @@ class VistaSesiones(VistaBase):
         self._tabla.grid(row=1, column=0, sticky="nsew")
 
     def actualizar(self) -> None:
-        filtro = self._estado.get().upper()
-        sesiones = [s for s in _ordenar(self.sistema.sesiones)
-                    if filtro == self.TODAS.upper() or s.estado.name == filtro]
-        self._tabla.cargar([_fila_sesion(s) for s in sesiones])
-
-    def _faltan_datos(self) -> bool:
-        s = self.sistema
-        for hay, aviso in ((s.docentes, "docente"), (s.aulas, "aula"), (s.asignaturas, "asignatura")):
-            if not hay:
-                self._avisar(f"Antes de crear una sesión registre al menos una {aviso}.")
-                return True
-        try:
-            s.periodo_activo()
-        except ValueError as e:
-            self._avisar(str(e))
-            return True
-        return False
+        self.presentador.cargar(self._estado.get())
 
     def _nueva(self) -> None:
-        if self._faltan_datos():
+        if self.presentador.faltan_datos():      # el presentador avisa qué falta
             return
-        s = self.sistema
+        op = self.presentador.opciones_formulario()
         datos = self._pedir("Nueva sesión de clase", [
-            Campo("dia", "Día", "opcion", [(d.name.capitalize(), d) for d in DiaSemana]),
+            Campo("dia", "Día", "opcion", op["dia"]),
             Campo("ini", "Hora de inicio (HH:MM)", "hora", inicial="07:00"),
             Campo("fin", "Hora de fin (HH:MM)", "hora", inicial="09:00"),
             Campo("cupo", "Cupo de estudiantes", "entero", inicial="30"),
-            Campo("asig", "Asignatura", "opcion", [(f"{a.codigo} - {a.nombre}", a.codigo) for a in s.asignaturas]),
-            Campo("doc", "Docente", "opcion", [(f"{d.id} - {d.get_nombre_completo()}", d.id) for d in s.docentes]),
-            Campo("aula", "Aula", "opcion", [(f"{a.codigo} - {a.nombre} (cap. {a.capacidad})", a.codigo)
-                                             for a in s.aulas])])
+            Campo("asig", "Asignatura", "opcion", op["asignatura"]),
+            Campo("doc", "Docente", "opcion", op["docente"]),
+            Campo("aula", "Aula", "opcion", op["aula"])])
         if datos:
-            self.ejecutar(lambda: s.crear_sesion(datos["dia"], datos["ini"], datos["fin"], datos["cupo"],
-                                                 datos["asig"], datos["doc"], datos["aula"]),
-                          "Sesión creada en borrador")
+            self.presentador.crear(datos["dia"], datos["ini"], datos["fin"], datos["cupo"],
+                                   datos["asig"], datos["doc"], datos["aula"])
 
     def _aprobar(self) -> None:
         elegido = self._seleccion_de(self._tabla, "una sesión")
-        coord = self._elegir_coordinador() if elegido is not None else None
-        if elegido is not None and coord is not None:
-            self.ejecutar(lambda: self.sistema.aprobar_sesion(int(elegido), coord),
-                          f"Sesión {elegido} aprobada")
+        if elegido is not None:
+            self.presentador.aprobar(int(elegido))
 
     def _rechazar(self) -> None:
         elegido = self._seleccion_de(self._tabla, "una sesión")
-        if elegido is None:
-            return
-        coord = self._elegir_coordinador()
-        if coord is None:
-            return
-        datos = self._pedir("Rechazar sesión", [Campo("motivo", "Motivo del rechazo")], "Rechazar")
-        if datos:
-            self.ejecutar(lambda: self.sistema.rechazar_sesion(int(elegido), coord, datos["motivo"]),
-                          f"Sesión {elegido} rechazada")
+        if elegido is not None:
+            self.presentador.rechazar(int(elegido))   # el presentador pide el motivo
 
     def _duplicar(self) -> None:
         """[PATRÓN: Prototype] Copia la sesión elegida a otro día sin volver a escribir sus datos."""
@@ -481,25 +447,27 @@ class VistaSesiones(VistaBase):
         if elegido is None:
             return
         datos = self._pedir("Duplicar sesión a otro día", [
-            Campo("dia", "Nuevo día", "opcion", [(d.name.capitalize(), d) for d in DiaSemana]),
+            Campo("dia", "Nuevo día", "opcion", self.presentador.opciones_formulario()["dia"]),
             Campo("ini", "Nueva hora de inicio (opcional)", "hora", opcional=True),
             Campo("fin", "Nueva hora de fin (opcional)", "hora", opcional=True)], "Duplicar")
         if datos:
-            self.ejecutar(lambda: self.sistema.duplicar_sesion(int(elegido), datos["dia"],
-                                                                datos["ini"], datos["fin"]),
-                          "Sesión duplicada en borrador")
+            self.presentador.duplicar(int(elegido), datos["dia"], datos["ini"], datos["fin"])
 
 
 # =================================================================== horario
-class VistaHorario(VistaBase):
+class VistaHorario(VistaBase, IVistaHorario):
     clave, titulo = "horario", "Horario semanal"
     subtitulo = "Cuadrícula de lunes a sábado; haga clic en un bloque para ver el detalle"
     icono = "horario"
     roles = (ADMINISTRADOR, COORDINADOR, DOCENTE)
-    TODOS = "Todos"
+
+    def _crear_presentador(self) -> PresentadorHorario:
+        return PresentadorHorario(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         t = self.ctx.tema
+        self._bloques: Sequence[BloqueHorario] = []   # lo último que mandó el presentador
+        self._horas = (7, 21)
         self.cuerpo.rowconfigure(0, weight=0)
         self.cuerpo.rowconfigure(1, weight=1)
         barra = ttk.Frame(self.cuerpo)
@@ -510,8 +478,9 @@ class VistaHorario(VistaBase):
         ttk.Label(barra, text="Período:").pack(side="left", padx=(0, t.px(6)))
         self._periodo = ttk.Combobox(barra, state="readonly", width=12)
         self._periodo.pack(side="left")
-        for combo in (self._docente, self._periodo):
-            combo.bind("<<ComboboxSelected>>", lambda _e: self._dibujar())
+        for combo in (self._docente, self._periodo):   # al cambiar un filtro, decide el presentador
+            combo.bind("<<ComboboxSelected>>",
+                       lambda _e: self.presentador.filtrar(self._docente.get(), self._periodo.get()))
         # Leyenda de colores (a la derecha).
         for estado in ("RECHAZADA", "APROBADA", "BORRADOR"):
             fondo, borde = COLOR_ESTADO[estado]
@@ -519,59 +488,33 @@ class VistaHorario(VistaBase):
                      font=t.f_chica).pack(side="right", padx=(t.px(4), 0))
         self._lienzo = tk.Canvas(self.cuerpo, background=COLORES["fondo"], highlightthickness=0)
         self._lienzo.grid(row=1, column=0, sticky="nsew")
-        self._lienzo.bind("<Configure>", lambda _e: self._dibujar())  # se redibuja al cambiar de tamaño
+        # Al cambiar de tamaño se vuelve a pintar lo mismo (no hace falta preguntar al presentador).
+        self._lienzo.bind("<Configure>", lambda _e: self._pintar())
 
     def actualizar(self) -> None:
-        docentes = [self.TODOS] + [d.get_nombre_completo() for d in self.sistema.docentes]
-        periodos = [self.TODOS] + [p.nombre for p in self.sistema.periodos]
-        actual_d, actual_p = self._docente.get(), self._periodo.get()
-        self._docente.configure(values=docentes)
-        self._periodo.configure(values=periodos)
-        self._docente.set(actual_d if actual_d in docentes else self.TODOS)
-        cuenta = self.ctx.cuenta
-        if cuenta is not None and cuenta.rol == DOCENTE:    # [NUEVO] un docente solo ve su horario
-            propio = next((d.get_nombre_completo() for d in self.sistema.docentes
-                           if d.id == cuenta.id_docente), self.TODOS)
-            self._docente.set(propio)
-            self._docente.configure(state="disabled")
-        if actual_p in periodos:
-            self._periodo.set(actual_p)
-        else:   # por defecto, el período activo
-            try:
-                self._periodo.set(self.sistema.periodo_activo().nombre)
-            except ValueError:
-                self._periodo.set(self.TODOS)
-        self._dibujar()
+        self.presentador.cargar(self._docente.get(), self._periodo.get())
 
-    def _visibles(self):
-        d, p = self._docente.get(), self._periodo.get()
-        return [s for s in self.sistema.sesiones
-                if (d in ("", self.TODOS) or s.docente.get_nombre_completo() == d)
-                and (p in ("", self.TODOS) or s.periodo.nombre == p)]
+    # ------------------------------------------------------------ IVistaHorario
+    def mostrar_filtros(self, docentes, periodos, docente: str, periodo: str, docente_fijo: bool) -> None:
+        llenar_combo(self._docente, docentes, docente)
+        llenar_combo(self._periodo, periodos, periodo)
+        self._docente.configure(state="disabled" if docente_fijo else "readonly")
 
-    @staticmethod
-    def _min(hora) -> int:
-        return hora.hour * 60 + hora.minute
+    def dibujar_horario(self, bloques: Sequence[BloqueHorario], hora_inicio: int, hora_fin: int) -> None:
+        self._bloques, self._horas = bloques, (hora_inicio, hora_fin)
+        self._pintar()
 
-    @staticmethod
-    def _recortar(fuente, texto: str, ancho: int) -> str:
-        """Acorta el texto con '…' para que no se salga del bloque."""
-        if fuente.measure(texto) <= ancho:
-            return texto
-        while texto and fuente.measure(texto + "…") > ancho:
-            texto = texto[:-1]
-        return texto + "…" if texto else ""
-
-    def _dibujar(self) -> None:
+    # ------------------------------------------------------------ dibujo (solo píxeles)
+    def _pintar(self) -> None:
+        """Convierte días y horas en coordenadas del Canvas. Qué sesiones mostrar y en qué
+        carril va cada una ya lo decidió el presentador (asignar_carriles)."""
         c, t = self._lienzo, self.ctx.tema
         c.delete("all")
         ancho, alto = c.winfo_width(), c.winfo_height()
         if ancho < 120 or alto < 120:
             return
         izq, sup, der, inf = t.px(52), t.px(28), t.px(4), t.px(4)
-        sesiones = self._visibles()
-        h0 = min([7] + [s.hora_inicio.hour for s in sesiones])
-        h1 = max([21] + [s.hora_fin.hour + (1 if s.hora_fin.minute else 0) for s in sesiones])
+        h0, h1 = self._horas
         dias = list(DiaSemana)
         ancho_dia = (ancho - izq - der) / len(dias)
         alto_hora = (alto - sup - inf) / (h1 - h0)
@@ -579,61 +522,41 @@ class VistaHorario(VistaBase):
         for h in range(h0, h1 + 1):                       # líneas y etiquetas de horas
             y = sup + (h - h0) * alto_hora
             c.create_line(izq, y, ancho - der, y, fill=COLORES["borde"])
-            if h < h1 or True:
-                c.create_text(izq - t.px(6), y, text=f"{h:02d}:00", anchor="e",
-                              fill=COLORES["texto_suave"], font=t.f_chica)
+            # [REFACTOR] Antes aquí había un  'if h < h1 or True:'  que siempre era verdadero.
+            c.create_text(izq - t.px(6), y, text=f"{h:02d}:00", anchor="e",
+                          fill=COLORES["texto_suave"], font=t.f_chica)
         for i, d in enumerate(dias):                      # columnas y títulos de días
             x = izq + i * ancho_dia
             c.create_line(x, sup, x, alto - inf, fill=COLORES["borde"])
             c.create_text(x + ancho_dia / 2, sup / 2, text=d.name.capitalize(), font=t.f_negrita)
         linea = t.f_chica.metrics("linespace")
-        for i, d in enumerate(dias):
-            del_dia = sorted((s for s in sesiones if s.dia == d), key=lambda s: (s.hora_inicio, s.hora_fin))
-            carriles: list[int] = []     # sesiones que se cruzan van una al lado de otra
-            colocadas = []
-            for s in del_dia:
-                inicio = self._min(s.hora_inicio)
-                for k, fin in enumerate(carriles):
-                    if fin <= inicio:
-                        carriles[k] = self._min(s.hora_fin)
-                        colocadas.append((s, k))
-                        break
-                else:
-                    carriles.append(self._min(s.hora_fin))
-                    colocadas.append((s, len(carriles) - 1))
-            n = max(1, len(carriles))
-            ancho_bloque = (ancho_dia - 4) / n
-            for s, k in colocadas:
-                x0 = izq + i * ancho_dia + 2 + k * ancho_bloque
-                y0 = sup + (self._min(s.hora_inicio) / 60 - h0) * alto_hora + 1
-                y1 = sup + (self._min(s.hora_fin) / 60 - h0) * alto_hora - 1
-                fondo, borde = COLOR_ESTADO[s.estado.name]
-                etiqueta = f"s{s.id}"
-                c.create_rectangle(x0, y0, x0 + ancho_bloque - 2, y1, fill=fondo, outline=borde,
-                                   width=1, tags=(etiqueta,))
-                nombre = s.docente.get_nombre_completo().split()
-                lineas = [s.asignatura.codigo, f"{nombre[0][0]}. {nombre[-1]}", s.aula.codigo]
-                caben = max(1, int((y1 - y0 - 4) // linea))
-                texto = "\n".join(self._recortar(t.f_chica, l, int(ancho_bloque - t.px(10)))
-                                  for l in lineas[:caben])
-                c.create_text(x0 + t.px(4), y0 + t.px(3), anchor="nw", text=texto, fill=borde,
-                              font=t.f_chica, tags=(etiqueta,))
-                c.tag_bind(etiqueta, "<Button-1>", lambda _e, ses=s: self._detalle(ses))
-
-    def _detalle(self, s) -> None:
-        extra = f"\nMotivo de rechazo: {s.motivo_rechazo}" if s.motivo_rechazo else ""
-        self._avisar(f"Sesión {s.id} - {s.estado.name.capitalize()}\n\n{s.asignatura}\n"
-                     f"Docente: {s.docente.get_nombre_completo()}\nAula: {s.aula}\n"
-                     f"{s.dia.name.capitalize()} {s.hora_inicio:%H:%M} a {s.hora_fin:%H:%M}\n"
-                     f"Cupo: {s.cupo}{extra}", "Detalle de la sesión")
+        for b in self._bloques:
+            i = dias.index(b.dia)
+            ancho_bloque = (ancho_dia - 4) / b.carriles
+            x0 = izq + i * ancho_dia + 2 + b.carril * ancho_bloque
+            y0 = sup + (minutos_del_dia(b.inicio) / 60 - h0) * alto_hora + 1
+            y1 = sup + (minutos_del_dia(b.fin) / 60 - h0) * alto_hora - 1
+            fondo, borde = COLOR_ESTADO[b.estado]
+            etiqueta = f"s{b.id}"
+            c.create_rectangle(x0, y0, x0 + ancho_bloque - 2, y1, fill=fondo, outline=borde,
+                               width=1, tags=(etiqueta,))
+            caben = max(1, int((y1 - y0 - 4) // linea))
+            texto = "\n".join(recortar_texto(t.f_chica, l, int(ancho_bloque - t.px(10)))
+                              for l in b.lineas[:caben])
+            c.create_text(x0 + t.px(4), y0 + t.px(3), anchor="nw", text=texto, fill=borde,
+                          font=t.f_chica, tags=(etiqueta,))
+            c.tag_bind(etiqueta, "<Button-1>", lambda _e, txt=b.detalle: self.avisar(txt, "Detalle de la sesión"))
 
 
 # =================================================================== reportes
-class VistaReportes(VistaBase):
+class VistaReportes(VistaBase, IVistaReportes):
     clave, titulo = "reportes", "Reportes"
     subtitulo = "Genere un reporte, revíselo en pantalla y expórtelo a CSV"
     icono = "reportes"
     roles = (ADMINISTRADOR, COORDINADOR)
+
+    def _crear_presentador(self) -> PresentadorReportes:
+        return PresentadorReportes(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         t = self.ctx.tema
@@ -644,8 +567,7 @@ class VistaReportes(VistaBase):
         barra = ttk.Frame(self.cuerpo)
         barra.grid(row=0, column=0, sticky="ew", pady=(0, t.px(8)))
         ttk.Label(barra, text="Tipo:").pack(side="left", padx=(0, t.px(6)))
-        self._tipo = ttk.Combobox(barra, state="readonly", width=22,
-                                  values=["Horario por período", "Carga docente"])
+        self._tipo = ttk.Combobox(barra, state="readonly", width=22, values=list(PresentadorReportes.TIPOS))
         self._tipo.current(0)
         self._tipo.pack(side="left", padx=(0, t.px(14)))
         ttk.Label(barra, text="Período:").pack(side="left", padx=(0, t.px(6)))
@@ -663,75 +585,45 @@ class VistaReportes(VistaBase):
         self._texto.grid(row=0, column=0, sticky="nsew")
         vertical.grid(row=0, column=1, sticky="ns")
         horizontal.grid(row=1, column=0, sticky="ew")
-        self._reporte: Optional[Reporte] = None   # [U2-POLIMORFISMO-ABSTRACTAS] cualquier tipo de Reporte
 
     def actualizar(self) -> None:
-        nombres = [p.nombre for p in self.sistema.periodos]
-        actual = self._periodo.get()
-        self._periodo.configure(values=nombres)
-        if actual in nombres:
-            self._periodo.set(actual)
-        else:
-            try:
-                self._periodo.set(self.sistema.periodo_activo().nombre)
-            except ValueError:
-                self._periodo.set(nombres[-1] if nombres else "")
+        self.presentador.cargar(self._periodo.get())
 
-    def _mostrar(self, texto: str) -> None:
+    # ------------------------------------------------------------ IVistaReportes
+    def mostrar_periodos(self, periodos, elegido: str) -> None:
+        llenar_combo(self._periodo, periodos, elegido)
+
+    def mostrar_reporte(self, texto: str) -> None:
         self._texto.configure(state="normal")
         self._texto.delete("1.0", "end")
         self._texto.insert("1.0", texto)
         self._texto.configure(state="disabled")
 
+    # ------------------------------------------------------------ eventos
     def _generar(self) -> None:
-        coord = self._elegir_coordinador()
-        if coord is None:
-            return
-        if self._tipo.current() == 0:
-            periodo = next((p for p in self.sistema.periodos if p.nombre == self._periodo.get()), None)
-            if periodo is None:
-                self._avisar("No hay períodos registrados: cree uno en la pantalla Períodos.")
-                return
-            accion = lambda: self.sistema.generar_reporte(coord, periodo.id)
-        else:
-            accion = lambda: self.sistema.generar_reporte_carga(coord)
-        ok, reporte = self.ejecutar(accion, "Reporte generado", cambia_datos=False)
-        if ok:
-            # [U2-POLIMORFISMO-ABSTRACTAS] Se usa 'contenido' sin saber qué tipo de Reporte es.
-            self._reporte = reporte
-            self._mostrar(reporte.contenido)
+        self.presentador.generar(self._tipo.current(), self._periodo.get())
 
     def _exportar(self) -> None:
-        if self._reporte is None:
-            self._avisar("Primero genere un reporte.")
+        nombre = self.presentador.nombre_archivo()   # None si aún no hay reporte (ya avisó)
+        if nombre is None:
             return
-        ruta = filedialog.asksaveasfilename(
-            parent=self, title="Guardar reporte", defaultextension=".csv",
-            initialfile=f"reporte_{self._reporte.id}.{self._reporte.extension_de('csv')}",
-            filetypes=[("CSV (Excel)", "*.csv")])
+        # Elegir DÓNDE guardar es parte de la vista (un cuadro de diálogo de tkinter).
+        ruta = filedialog.asksaveasfilename(parent=self, title="Guardar reporte", defaultextension=".csv",
+                                            initialfile=nombre, filetypes=[("CSV (Excel)", "*.csv")])
         if ruta:
-            # utf-8-sig: Excel reconoce bien las tildes.
-            with open(ruta, "w", encoding="utf-8-sig", newline="") as archivo:
-                archivo.write(self._reporte.exportar("csv"))
-            self.ctx.mensaje(f"Reporte guardado en {ruta}")
-
-
-def rol_efectivo(rol_guardado: str, id_docente, sistema: SistemaAcademico) -> str:
-    """Un docente que el administrador designó coordinador pasa a ser COORDINADOR sin
-    tener que crear otra cuenta."""
-    if rol_guardado == DOCENTE and any(c.id == id_docente for c in sistema.coordinadores):
-        return COORDINADOR
-    return rol_guardado
+            self.presentador.exportar_csv(ruta)
 
 
 # ================================================================ estadísticas
-class VistaEstadisticas(VistaBase):
-    """[NUEVO] Gráficas e indicadores. Los números los calcula EstadisticasHorario;
-    las gráficas (GraficoBarras, GraficoDona, GraficoProgreso) solo los dibujan."""
+class VistaEstadisticas(VistaBase, IVistaEstadisticas):
+    """Gráficas e indicadores. Los números los calcula EstadisticasHorario, el presentador
+    les da formato y las gráficas (GraficoBarras, GraficoDona, GraficoProgreso) solo los dibujan."""
     clave, titulo = "estadisticas", "Estadísticas"
     subtitulo = "Resumen visual de la carga y la ocupación del horario"
     icono = "estadisticas"
-    TODOS = "Todos los períodos"
+
+    def _crear_presentador(self) -> PresentadorEstadisticas:
+        return PresentadorEstadisticas(self, self.ctx.sistema, **self._dependencias())
 
     def _construir(self) -> None:
         t = self.ctx.tema
@@ -778,38 +670,34 @@ class VistaEstadisticas(VistaBase):
                    pady=(0 if k < 2 else t.px(5), t.px(5) if k < 2 else 0))
 
     def actualizar(self) -> None:
-        nombres = [self.TODOS] + [p.nombre for p in self.sistema.periodos]
-        actual = self._periodo.get()
-        self._periodo.configure(values=nombres)
-        if actual in nombres:
-            self._periodo.set(actual)
-        else:
-            try:
-                self._periodo.set(self.sistema.periodo_activo().nombre)
-            except ValueError:
-                self._periodo.set(self.TODOS)
-        id_periodo = next((p.id for p in self.sistema.periodos if p.nombre == self._periodo.get()), None)
-        est = EstadisticasHorario(self.sistema, id_periodo=id_periodo)
-        ind = est.indicadores()
-        self._numeros["sesiones"].configure(text=f"{ind['sesiones']:g}")
-        self._numeros["horas"].configure(text=f"{ind['horas_programadas']:g} h")
-        self._numeros["aprobacion"].configure(text=f"{ind['aprobacion']:g} %")
-        self._numeros["ocupacion"].configure(text=f"{ind['ocupacion_media']:g} %")
-        self._numeros["carga"].configure(text=f"{ind['carga_media']:g} %")
-        animar = self.winfo_ismapped()
-        self._g_estado.poner(list(est.por_estado().items()), animar)
-        self._g_dia.poner(list(est.por_dia().items()), animar)
-        self._g_docente.poner(est.horas_por_docente(), animar)
-        self._g_aula.poner([(codigo, pct, 100) for codigo, pct in est.ocupacion_por_aula()], animar)
+        self.presentador.cargar(self._periodo.get())
+
+    # ------------------------------------------------------------ IVistaEstadisticas
+    def mostrar_periodos(self, periodos, elegido: str) -> None:
+        llenar_combo(self._periodo, periodos, elegido)
+
+    def mostrar_indicadores(self, textos: dict[str, str]) -> None:
+        for clave, texto in textos.items():
+            self._numeros[clave].configure(text=texto)
+
+    def mostrar_graficos(self, por_estado, por_dia, por_docente, por_aula) -> None:
+        animar = self.winfo_ismapped()      # solo se anima si la pantalla está a la vista
+        self._g_estado.poner(por_estado, animar)
+        self._g_dia.poner(por_dia, animar)
+        self._g_docente.poner(por_docente, animar)
+        self._g_aula.poner(por_aula, animar)
 
 
 # ==================================================================== usuarios
-class VistaUsuarios(VistaBase):
-    """[NUEVO] Solo el administrador: crea cuentas de acceso para los docentes."""
+class VistaUsuarios(VistaConTabla):
+    """Solo el administrador: crea cuentas de acceso para los docentes."""
     clave, titulo = "usuarios", "Usuarios y accesos"
     subtitulo = "Cuentas para iniciar sesión (el usuario de un docente es su correo)"
     icono = "usuarios"
     roles = (ADMINISTRADOR,)
+
+    def _crear_presentador(self) -> PresentadorUsuarios:
+        return PresentadorUsuarios(self, self.ctx.sistema, self.ctx.autenticador, **self._dependencias())
 
     def _construir(self) -> None:
         self.encabezado.agregar_boton("Eliminar cuenta", self._eliminar)
@@ -820,74 +708,34 @@ class VistaUsuarios(VistaBase):
             ("rol", "Rol", 120, "center"), ("doc", "Docente (ID)", 100, "center")])
         self._tabla.grid(row=0, column=0, sticky="nsew")
 
-    def _auth(self) -> Optional[AutenticadorLocal]:
-        a = self.ctx.autenticador
-        if not isinstance(a, AutenticadorLocal):
-            self._avisar("Este autenticador no permite administrar cuentas desde la interfaz.")
-            return None
-        return a
-
     def actualizar(self) -> None:
-        a = self.ctx.autenticador
-        if not isinstance(a, AutenticadorLocal):
-            return
-        self._tabla.cargar([(c["usuario"], (c["usuario"], c["nombre"],
-                                            rol_efectivo(c["rol"], c["id_docente"], self.sistema).capitalize(),
-                                            c["id_docente"] if c["id_docente"] is not None else "—"),
-                             "APROBADA" if c["rol"] == ADMINISTRADOR else None) for c in a.usuarios()])
+        self.presentador.cargar()
 
     def _nueva(self) -> None:
-        a = self._auth()
-        if a is None:
-            return
-        if not self.sistema.docentes:
-            self._avisar("Primero registre docentes en la pantalla Docentes.")
+        if not self.presentador.puede_crear():
             return
         datos = self._pedir("Crear cuenta para un docente", [
-            Campo("doc", "Docente", "opcion", [(f"{d.id} - {d.get_nombre_completo()}", d.id)
-                                                for d in self.sistema.docentes]),
+            Campo("doc", "Docente", "opcion", self.presentador.opciones_docentes()),
             Campo("clave", "Contraseña (mín. 6)", "clave"), Campo("repetir", "Repetir contraseña", "clave")],
             "Crear cuenta")
-        if not datos:
-            return
-
-        def crear():
-            if datos["clave"] != datos["repetir"]:
-                raise ValueError("Las contraseñas no coinciden")
-            d = self.sistema.buscar_docente(datos["doc"])
-            a.crear_cuenta(d.correo, datos["clave"], DOCENTE, d.id, d.get_nombre_completo())
-        self.ejecutar(crear, "Cuenta creada: el usuario es el correo del docente", cambia_datos=False)
-        self.actualizar()
+        if datos:
+            self.presentador.crear_cuenta_docente(datos["doc"], datos["clave"], datos["repetir"])
 
     def _restablecer(self) -> None:
-        a = self._auth()
-        elegido = self._seleccion_de(self._tabla, "una cuenta") if a else None
+        elegido = self._seleccion_de(self._tabla, "una cuenta")
         if elegido is None:
             return
         datos = self._pedir(f"Nueva contraseña para {elegido}", [
             Campo("clave", "Contraseña nueva (mín. 6)", "clave"), Campo("repetir", "Repetir", "clave")], "Cambiar")
-        if not datos:
-            return
-
-        def cambiar():
-            if datos["clave"] != datos["repetir"]:
-                raise ValueError("Las contraseñas no coinciden")
-            a.restablecer_clave(elegido, datos["clave"])
-        self.ejecutar(cambiar, "Contraseña actualizada", cambia_datos=False)
+        if datos:
+            self.presentador.restablecer_clave(elegido, datos["clave"], datos["repetir"])
 
     def _eliminar(self) -> None:
-        a = self._auth()
-        elegido = self._seleccion_de(self._tabla, "una cuenta") if a else None
-        if elegido is None:
-            return
-        if self.ctx.cuenta and elegido == self.ctx.cuenta.usuario:
-            self._avisar("No puede eliminar la cuenta con la que inició sesión.")
-            return
-        if messagebox.askyesno("Eliminar cuenta", f"¿Eliminar la cuenta {elegido}?", parent=self):
-            self.ejecutar(lambda: a.eliminar_cuenta(elegido), "Cuenta eliminada", cambia_datos=False)
-            self.actualizar()
+        elegido = self._seleccion_de(self._tabla, "una cuenta")
+        if elegido is not None:
+            self.presentador.eliminar_cuenta(elegido)   # el presentador pide la confirmación
 
 
-# [SOLID-O] Para agregar una pantalla nueva: crear la clase y añadirla a esta lista.
+# [SOLID-O] Para agregar una pantalla nueva: crear la vista (y su presentador) y añadirla a esta lista.
 VISTAS_POR_DEFECTO: tuple = (VistaInicio, VistaEstadisticas, VistaHorario, VistaSesiones, VistaDocentes,
                              VistaAulas, VistaAsignaturas, VistaPeriodos, VistaReportes, VistaUsuarios)

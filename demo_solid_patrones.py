@@ -11,7 +11,7 @@ from datetime import date, time
 
 from main import crear_sistema
 from modelos import (ConfiguracionSistema, CoordinadorAcademico, DiaSemana,
-                     Docente, Exportador, ExportadorCsv, ExportadorTxt, Reporte, ReporteCargaDocente,
+                     Docente, Exportador, ExportadorCsv, ExportadorTxt, Reporte,
                      ReporteHorario, SesionClase, Usuario, creador_para)
 from servicios import (AlmacenJSON, AlmacenMemoria, Almacenamiento,
                        AlmacenamientoEscritura, ReglaSesion, SistemaAcademico)

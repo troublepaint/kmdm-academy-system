@@ -86,7 +86,7 @@ class VentanaLogin(tk.Tk):
         if isinstance(autenticador, AutenticadorLocal) and autenticador.con_clave_inicial():
             ttk.Label(centro, style="TarjetaSuave.TLabel", wraplength=ancho_f - t.px(80), justify="left",
                       text="Primer uso: usuario  admin  y contraseña  admin123.\n"
-                           "Cámbiala después en la pantalla Usuarios.").pack(anchor="w", pady=(t.px(18), 0))
+                           "Cámbiala después con el botón «Mi contraseña».").pack(anchor="w", pady=(t.px(18), 0))
 
         self.bind("<Return>", lambda _e: self._entrar())
         self.bind("<Escape>", lambda _e: self.destroy())

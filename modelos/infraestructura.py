@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .validaciones import texto_obligatorio
+
 # Solo para anotaciones de tipo; evita un import circular con academico.py.
 if TYPE_CHECKING:
     from .academico import Asignatura
@@ -18,10 +20,8 @@ class AulaClasificacion:
 
     def __init__(self, id_clasificacion: int, nombre: str, descripcion: str,
                  requiere_equipamiento: bool = False):
-        if not nombre or not nombre.strip():
-            raise ValueError("El nombre de la clasificación no puede estar vacío")
         self._id = id_clasificacion
-        self._nombre = nombre.strip()
+        self._nombre = texto_obligatorio(nombre, "El nombre de la clasificación no puede estar vacío")
         self._descripcion = descripcion
         self._requiere_equipamiento = requiere_equipamiento
 
@@ -61,14 +61,15 @@ class Aula:
 
     def __init__(self, codigo: str, nombre: str, capacidad: int, ubicacion: str,
                  clasificacion: AulaClasificacion, disponible: bool = True):
-        if not codigo or not codigo.strip():
-            raise ValueError("El código del aula no puede estar vacío")
+        codigo = texto_obligatorio(codigo, "El código del aula no puede estar vacío")
         if capacidad <= 0:
             raise ValueError("La capacidad debe ser mayor que 0")
-        self._codigo = codigo.strip()
-        self._nombre = nombre
+        self._codigo = codigo
+        # [REFACTOR] Antes el nombre y la ubicación del aula se aceptaban vacíos (las demás
+        # clases sí validaban sus textos). Ahora se validan igual que el resto.
+        self._nombre = texto_obligatorio(nombre, "El nombre del aula no puede estar vacío")
         self._capacidad = capacidad
-        self._ubicacion = ubicacion
+        self._ubicacion = texto_obligatorio(ubicacion, "La ubicación del aula no puede estar vacía")
         # Cada aula tiene exactamente UNA clasificación (multiplicidad 1 del diagrama).
         self._clasificacion = clasificacion
         self._disponible = disponible

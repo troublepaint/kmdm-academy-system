@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from modelos import ConfiguracionSistema, DiaSemana, EstadoSesion
+from modelos import ConfiguracionSistema, DiaSemana, EstadoSesion, minutos_del_dia
 from .sistema import SistemaAcademico
 
 
@@ -22,10 +22,6 @@ class EstadisticasHorario:
         self._config = configuracion or ConfiguracionSistema.obtener_instancia()
         self._sesiones = [x for x in sistema.sesiones
                           if id_periodo is None or x.periodo.id == id_periodo]
-
-    @property
-    def sesiones(self) -> list:
-        return list(self._sesiones)
 
     def _vigentes(self) -> list:
         """Las sesiones rechazadas no ocupan aula ni docente."""
@@ -49,9 +45,8 @@ class EstadisticasHorario:
 
     def horas_semana_aula(self) -> float:
         """Horas útiles de un aula en la semana (lunes a sábado, horario de atención)."""
-        dia = (self._config.hora_cierre.hour + self._config.hora_cierre.minute / 60) - \
-              (self._config.hora_apertura.hour + self._config.hora_apertura.minute / 60)
-        return dia * len(DiaSemana)
+        minutos = minutos_del_dia(self._config.hora_cierre) - minutos_del_dia(self._config.hora_apertura)
+        return minutos / 60 * len(DiaSemana)
 
     def ocupacion_por_aula(self) -> list[tuple[str, float]]:
         """(código del aula, % de ocupación), de mayor a menor."""
@@ -61,12 +56,6 @@ class EstadisticasHorario:
             horas = sum(x.get_duracion_horas() for x in self._vigentes() if x.aula.codigo == a.codigo)
             filas.append((a.codigo, round(100 * horas / total, 1)))
         return sorted(filas, key=lambda f: -f[1])
-
-    def sesiones_por_asignatura(self) -> list[tuple[str, int]]:
-        cuenta: dict[str, int] = {}
-        for x in self._vigentes():
-            cuenta[x.asignatura.codigo] = cuenta.get(x.asignatura.codigo, 0) + 1
-        return sorted(cuenta.items(), key=lambda f: -f[1])
 
     # ---------------------------------------------------------------- indicadores
     def indicadores(self) -> dict[str, float]:
