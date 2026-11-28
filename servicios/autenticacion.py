@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from .archivos import guardar_json_seguro
+
 ADMINISTRADOR = "ADMINISTRADOR"
 COORDINADOR = "COORDINADOR"
 DOCENTE = "DOCENTE"
@@ -71,7 +73,7 @@ def validar_clave_nueva(clave: str) -> None:
 
 class AutenticadorLocal(Autenticador):
     """Cuentas guardadas en un archivo JSON. Si el archivo no existe, crea la cuenta
-    inicial admin / admin123 (se recomienda cambiarla en la pantalla Usuarios)."""
+    inicial admin / admin123 (se recomienda cambiarla con el botón "Mi contraseña")."""
 
     def __init__(self, ruta: str | Path):
         self._ruta = Path(ruta)
@@ -94,14 +96,26 @@ class AutenticadorLocal(Autenticador):
         return [{"usuario": u, "nombre": d["nombre"], "rol": d["rol"], "id_docente": d.get("id_docente")}
                 for u, d in sorted(self._cuentas.items())]
 
-    def existe(self, usuario: str) -> bool:
-        return self._clave_usuario(usuario) in self._cuentas
-
     def con_clave_inicial(self) -> bool:
         """True si admin todavía usa la contraseña de fábrica (la ventana avisa)."""
         d = self._cuentas.get(USUARIO_INICIAL)
         return bool(d) and hmac.compare_digest(
             _hash(CLAVE_INICIAL, bytes.fromhex(d["sal"])), d["hash"])
+
+    def _exigir_cuenta(self, usuario: str) -> str:
+        """[REFACTOR] Antes 'si no existe, error' estaba copiado en restablecer y eliminar."""
+        u = self._clave_usuario(usuario)
+        if u not in self._cuentas:
+            raise ValueError("La cuenta no existe")
+        return u
+
+    @staticmethod
+    def _sal_y_hash(clave: str) -> dict:
+        """[REFACTOR] Valida la clave nueva y devuelve su sal + hash. Antes este bloque estaba
+        repetido al crear la cuenta y al restablecer la clave."""
+        validar_clave_nueva(clave)
+        sal = secrets.token_bytes(16)
+        return {"sal": sal.hex(), "hash": _hash(clave, sal)}
 
     # ------------------------------------------------------------- escritura
     def crear_cuenta(self, usuario: str, clave: str, rol: str, id_docente: Optional[int] = None,
@@ -111,26 +125,18 @@ class AutenticadorLocal(Autenticador):
             raise ValueError("El usuario no puede estar vacío")
         if u in self._cuentas:
             raise ValueError(f"Ya existe una cuenta con el usuario '{u}'")
-        validar_clave_nueva(clave)
-        sal = secrets.token_bytes(16)
-        self._cuentas[u] = {"sal": sal.hex(), "hash": _hash(clave, sal), "rol": rol,
+        self._cuentas[u] = {**self._sal_y_hash(clave), "rol": rol,
                             "id_docente": id_docente, "nombre": nombre or u}
         self._guardar()
 
     def restablecer_clave(self, usuario: str, clave_nueva: str) -> None:
         """Uso del administrador: pone una clave nueva sin pedir la anterior."""
-        u = self._clave_usuario(usuario)
-        if u not in self._cuentas:
-            raise ValueError("La cuenta no existe")
-        validar_clave_nueva(clave_nueva)
-        sal = secrets.token_bytes(16)
-        self._cuentas[u].update(sal=sal.hex(), hash=_hash(clave_nueva, sal))
+        u = self._exigir_cuenta(usuario)
+        self._cuentas[u].update(self._sal_y_hash(clave_nueva))
         self._guardar()
 
     def eliminar_cuenta(self, usuario: str) -> None:
-        u = self._clave_usuario(usuario)
-        if u not in self._cuentas:
-            raise ValueError("La cuenta no existe")
+        u = self._exigir_cuenta(usuario)
         admins = [x for x, d in self._cuentas.items() if d["rol"] == ADMINISTRADOR]
         if self._cuentas[u]["rol"] == ADMINISTRADOR and len(admins) == 1:
             raise ValueError("No se puede eliminar al único administrador")
@@ -154,7 +160,4 @@ class AutenticadorLocal(Autenticador):
 
     # ---------------------------------------------------------------- archivo
     def _guardar(self) -> None:
-        self._ruta.parent.mkdir(parents=True, exist_ok=True)
-        temporal = self._ruta.with_suffix(".tmp")
-        temporal.write_text(json.dumps(self._cuentas, indent=2, ensure_ascii=False), encoding="utf-8")
-        temporal.replace(self._ruta)   # reemplazo atómico: nunca queda el archivo a medias
+        guardar_json_seguro(self._ruta, self._cuentas)   # [REFACTOR] escritura común con AlmacenJSON

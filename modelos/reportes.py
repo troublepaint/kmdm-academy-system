@@ -36,6 +36,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Iterable, Optional
 
 from .exportadores import Exportador, ExportadorCsv, ExportadorTxt
+from .horarios import ordenar_por_horario
+from .validaciones import texto_obligatorio
 
 if TYPE_CHECKING:
     from .horarios import SesionClase
@@ -50,8 +52,7 @@ class Reporte(ABC):
 
     def __init__(self, titulo: str, exportadores: Optional[Iterable[Exportador]] = None,
                  id_reporte: Optional[int] = None):
-        if not titulo or not titulo.strip():
-            raise ValueError("El título no puede estar vacío")
+        titulo = texto_obligatorio(titulo, "El título no puede estar vacío")
         # [U2-INYECCIÓN-DEPENDENCIAS] Los exportadores llegan desde afuera; si no
         # se entregan, se usan TXT y CSV por defecto.
         lista = list(exportadores) if exportadores is not None else [ExportadorTxt(), ExportadorCsv()]
@@ -59,7 +60,7 @@ class Reporte(ABC):
         if "txt" not in self._exportadores:
             raise ValueError("Se necesita un exportador 'txt' para mostrar el reporte")
         self._id = id_reporte if id_reporte is not None else next(self._contador)
-        self._titulo = titulo.strip()
+        self._titulo = titulo
         self._fecha_generacion: Optional[datetime] = None
         self._contenido = ""
         self._filas: list[tuple] = []
@@ -110,10 +111,14 @@ class Reporte(ABC):
         # [PATRÓN: Strategy] el reporte delega el formato en la estrategia elegida.
         return exportador.exportar(self._titulo, self._encabezados(), self._filas)
 
-    def exportar(self, formato: str) -> str:
-        """Devuelve el reporte en el formato pedido ('txt', 'csv'...)."""
+    def _exigir_generado(self) -> None:
+        """[REFACTOR] Esta comprobación estaba copiada en exportar() e imprimir()."""
         if self._fecha_generacion is None:
             raise ValueError("Primero debe generar el reporte")
+
+    def exportar(self, formato: str) -> str:
+        """Devuelve el reporte en el formato pedido ('txt', 'csv'...)."""
+        self._exigir_generado()
         return self._exportar_con(formato)
 
     def extension_de(self, formato: str) -> str:
@@ -121,8 +126,7 @@ class Reporte(ABC):
         return self._exportadores[formato.lower()].extension
 
     def imprimir(self) -> None:
-        if self._fecha_generacion is None:
-            raise ValueError("Primero debe generar el reporte")
+        self._exigir_generado()
         print(self._contenido)
 
 
@@ -142,7 +146,7 @@ class ReporteHorario(Reporte):
         return ("dia", "inicio", "fin", "asignatura", "docente", "aula", "estado")
 
     def _obtener_filas(self) -> list[tuple]:
-        ordenadas = sorted(self._sesiones, key=lambda s: (s.dia.value, s.hora_inicio))
+        ordenadas = ordenar_por_horario(self._sesiones)   # [REFACTOR] función compartida
         return [(s.dia.name, f"{s.hora_inicio:%H:%M}", f"{s.hora_fin:%H:%M}",
                  s.asignatura.codigo, s.docente.get_nombre_completo(),
                  s.aula.codigo, s.estado.name) for s in ordenadas]

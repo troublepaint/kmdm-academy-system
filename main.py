@@ -10,15 +10,18 @@ Así el resto del programa depende de abstracciones y no de detalles.
 
 [SOLID-D] Inversión de dependencias: los módulos de alto nivel (menú, sistema)
 no crean a los de bajo nivel (almacén, reglas); los reciben.
+[MVP] Modelo = SistemaAcademico; Vista = MenuConsola (consola/); Presentadores =
+presentadores/ (los crea el menú y son los MISMOS que usa la ventana de main_gui.py).
 [SOLID-O] Para cambiar las reglas basta editar la lista de abajo, sin tocar
 SistemaAcademico. Para guardar en otro formato basta otro Almacenamiento.
 """
 from pathlib import Path
 from typing import Optional
 
+from consola import MenuConsola     # [MVP] la vista de consola (antes estaba en servicios/)
 from modelos import (Administrador, ConfiguracionSistema,
                      ConstructorSesionClase)
-from servicios import (AlmacenJSON, ArchivoDatosError, MenuConsola,
+from servicios import (AlmacenJSON, ArchivoDatosError,
                        ReglaCapacidadAula, ReglaConflictoHorario,
                        ReglaHorarioAtencion, SistemaAcademico)
 

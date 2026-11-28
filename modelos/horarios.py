@@ -125,9 +125,7 @@ class SesionClase:
     # ---- métodos del diagrama ----
     def get_duracion_horas(self) -> float:
         """Duración en horas (puede tener decimales: 1.5 = una hora y media)."""
-        ini = self._hora_inicio.hour * 60 + self._hora_inicio.minute  # a minutos
-        fin = self._hora_fin.hour * 60 + self._hora_fin.minute
-        return (fin - ini) / 60
+        return (minutos_del_dia(self._hora_fin) - minutos_del_dia(self._hora_inicio)) / 60
 
     def se_solapa_con(self, otra: SesionClase) -> bool:
         """True si ambas sesiones son el mismo día y sus horas se cruzan.
@@ -214,6 +212,28 @@ class SesionClase:
         return (f"{self._dia.name} {self._hora_inicio:%H:%M}-{self._hora_fin:%H:%M} | "
                 f"{self._asignatura.codigo} | {self._docente.get_nombre_completo()} | "
                 f"{self._aula.codigo} | {self._estado.name}")
+
+
+# --------------------------------------------------------------------------
+# [MVP] [REFACTOR] Funciones compartidas. Antes el mismo  sorted(..., key=lambda s:
+# (s.dia.value, s.hora_inicio))  estaba copiado en 5 lugares (sistema, reportes,
+# menú de consola y 2 veces en la interfaz) y el cálculo  max(id) + 1  en 3.
+# Ahora hay UNA sola versión: si cambia el criterio, se cambia solo aquí.
+# (minutos_del_dia está escrita más abajo; SesionClase la usa al ejecutarse, no al definirse.)
+def ordenar_por_horario(sesiones) -> list[SesionClase]:
+    """Devuelve las sesiones ordenadas por día de la semana y hora de inicio."""
+    return sorted(sesiones, key=lambda s: (s.dia.value, s.hora_inicio))
+
+
+def minutos_del_dia(hora: time) -> int:
+    """Convierte una hora en minutos desde las 00:00 (07:30 -> 450). Antes esta cuenta
+    'hora * 60 + minuto' estaba repetida en la sesión, el horario y las estadísticas."""
+    return hora.hour * 60 + hora.minute
+
+
+def siguiente_id(objetos) -> int:
+    """ID automático: el mayor ID existente + 1 (o 1 si la lista está vacía)."""
+    return max((o.id for o in objetos), default=0) + 1
 
 
 if __name__ == "__main__":

@@ -28,9 +28,9 @@ COLORES = {
     "texto": "#1F2937",
     "texto_suave": "#6B7280",
     "ok": "#1E9E6A",
-    "aviso": "#D98E04",
     "error": "#D64545",
     "fila_alt": "#F7F9FC",
+    "cabecera": "#E7ECF5",     # encabezado de las tablas y barra de estado
 }
 
 # Colores por estado de sesión: (fondo, borde/texto). Se usan en tablas y horario.
@@ -92,8 +92,7 @@ class Tema:
         relleno = (self.px(12), self.px(6))
         for nombre, fondo, fondo_hover, texto in (
                 ("Acento", c["acento"], c["acento_osc"], "#FFFFFF"),
-                ("Suave", c["tarjeta"], "#E8EDF6", c["texto"]),
-                ("Peligro", c["error"], "#B53636", "#FFFFFF")):
+                ("Suave", c["tarjeta"], "#E8EDF6", c["texto"])):
             s.configure(f"{nombre}.TButton", background=fondo, foreground=texto,
                         bordercolor=c["borde"], borderwidth=1, focusthickness=0,
                         padding=relleno, relief="flat")
@@ -118,13 +117,12 @@ class Tema:
 
         s.configure("Treeview", background=c["tarjeta"], fieldbackground=c["tarjeta"],
                     foreground=c["texto"], rowheight=self.px(27), borderwidth=0, font=self.f_normal)
-        s.configure("Treeview.Heading", background="#E7ECF5", foreground=c["texto"],
+        s.configure("Treeview.Heading", background=c["cabecera"], foreground=c["texto"],
                     font=self.f_negrita, relief="flat", padding=(self.px(6), self.px(6)))
         s.map("Treeview", background=[("selected", "#CFE0FF")], foreground=[("selected", c["texto"])])
         s.map("Treeview.Heading", background=[("active", "#DCE4F2")])
         s.configure("TCombobox", padding=self.px(4), fieldbackground=c["tarjeta"])
         s.configure("TEntry", padding=self.px(4), fieldbackground=c["tarjeta"])
-        s.configure("Vertical.TScrollbar", background="#D3DAE6", troughcolor=c["fondo"],
-                    borderwidth=0, arrowsize=self.px(12))
-        s.configure("Horizontal.TScrollbar", background="#D3DAE6", troughcolor=c["fondo"],
-                    borderwidth=0, arrowsize=self.px(12))
+        for barra in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):   # [REFACTOR] antes, 2 bloques iguales
+            s.configure(barra, background="#D3DAE6", troughcolor=c["fondo"],
+                        borderwidth=0, arrowsize=self.px(12))

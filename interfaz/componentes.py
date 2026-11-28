@@ -17,6 +17,24 @@ from typing import Any, Callable, Optional, Sequence
 from .tema import COLOR_ESTADO, COLORES, Tema
 
 
+# ============================================================ ayudas de texto
+def recortar_texto(fuente, texto: str, ancho: float) -> str:
+    """Acorta el texto con '…' para que quepa en 'ancho' píxeles.
+    [REFACTOR] Antes estaba escrito dos veces: en el horario (vistas.py) y en las gráficas."""
+    if fuente.measure(texto) <= ancho:
+        return texto
+    while texto and fuente.measure(texto + "…") > ancho:
+        texto = texto[:-1]
+    return texto + "…" if texto else ""
+
+
+def llenar_combo(combo, valores, elegido: str) -> None:
+    """Pone las opciones de una lista desplegable y deja marcada la elegida.
+    [REFACTOR] Antes se repetía en Horario (2 veces), Reportes y Estadísticas."""
+    combo.configure(values=list(valores))
+    combo.set(elegido)
+
+
 # ============================================================ encabezado de página
 class Encabezado(ttk.Frame):
     """Título + subtítulo a la izquierda y una zona de botones a la derecha."""
@@ -45,8 +63,7 @@ class Tabla(ttk.Frame):
     mínimo: así la misma tabla sirve en una laptop de 14" y en un monitor grande.
     """
 
-    def __init__(self, master, tema: Tema, columnas: Sequence[tuple],
-                 al_doble_clic: Optional[Callable[[], None]] = None):
+    def __init__(self, master, tema: Tema, columnas: Sequence[tuple]):
         """columnas: lista de (id, título, ancho_de_diseño, alineación)."""
         super().__init__(master, style="Tarjeta.TFrame", borderwidth=1, relief="solid")
         self.columnconfigure(0, weight=1)
@@ -67,8 +84,6 @@ class Tabla(ttk.Frame):
         self._arbol.tag_configure("impar", background=COLORES["fila_alt"])
         for estado, (fondo, _) in COLOR_ESTADO.items():  # filas coloreadas por estado
             self._arbol.tag_configure(estado, background=fondo)
-        if al_doble_clic:
-            self._arbol.bind("<Double-1>", lambda _e: al_doble_clic())
 
     @staticmethod
     def _auto(barra: ttk.Scrollbar, primero: str, ultimo: str) -> None:
@@ -92,9 +107,6 @@ class Tabla(ttk.Frame):
     def seleccion(self) -> Optional[str]:
         elegidas = self._arbol.selection()
         return elegidas[0] if elegidas else None
-
-    def vaciar(self) -> None:
-        self._arbol.delete(*self._arbol.get_children())
 
 
 # ===================================================================== tarjeta KPI

@@ -20,6 +20,8 @@ Diseño pensado para laptops de 14 a 16 pulgadas (y monitores mayores):
     y esta ventana avisa a TODAS las pantallas para que se refresquen.
 [U2-POLIMORFISMO-ABSTRACTAS] Se llama a vista.actualizar() en cada pantalla sin
     conocer su tipo concreto.
+[MVP] [MODIFICADO] La ventana también es una VISTA (implementa IVista) para el botón
+    "Mi contraseña": la lógica de cambiar la clave está en PresentadorMiClave.
 """
 from __future__ import annotations
 
@@ -28,15 +30,16 @@ from dataclasses import replace
 from tkinter import messagebox, ttk
 from typing import Optional, Sequence
 
+from presentadores import IVista, PresentadorMiClave, rol_efectivo
 from servicios import (AlmacenamientoEscritura, Autenticador, Cuenta, SistemaAcademico)
 
 from .componentes import Campo, pedir_datos
 from .imagenes import Imagenes
 from .tema import COLORES, Tema
-from .vistas import VISTAS_POR_DEFECTO, Contexto, VistaBase, rol_efectivo
+from .vistas import VISTAS_POR_DEFECTO, Contexto, VistaBase
 
 
-class VentanaPrincipal(tk.Tk):
+class VentanaPrincipal(tk.Tk, IVista):
     def __init__(self, sistema: SistemaAcademico, almacen: AlmacenamientoEscritura,
                  cuenta: Cuenta, autenticador: Autenticador,
                  vistas: Optional[Sequence[type]] = None):
@@ -130,12 +133,13 @@ class VentanaPrincipal(tk.Tk):
 
     def _crear_barra_estado(self) -> None:
         t = self.tema
-        barra = tk.Frame(self, background="#E7ECF5", height=t.px(26))
+        fondo = COLORES["cabecera"]
+        barra = tk.Frame(self, background=fondo, height=t.px(26))
         barra.grid(row=1, column=0, columnspan=2, sticky="ew")
-        self._estado = tk.Label(barra, text="Listo", background="#E7ECF5", foreground=COLORES["texto_suave"],
+        self._estado = tk.Label(barra, text="Listo", background=fondo, foreground=COLORES["texto_suave"],
                                 font=t.f_chica, anchor="w")
         self._estado.pack(side="left", padx=t.px(12), pady=t.px(3))
-        tk.Label(barra, text="Los cambios se guardan automáticamente", background="#E7ECF5",
+        tk.Label(barra, text="Los cambios se guardan automáticamente", background=fondo,
                  foreground=COLORES["texto_suave"], font=t.f_chica).pack(side="right", padx=t.px(12))
 
     def _atajos(self) -> None:
@@ -181,21 +185,23 @@ class VentanaPrincipal(tk.Tk):
         if self._pantalla_completa:
             self._alternar_pantalla_completa()
 
+    # ------------------------------------------------------------------ IVista
+    # [MVP] Lo mínimo que PresentadorMiClave necesita de la ventana. [SOLID-I]
+    def mostrar_mensaje(self, texto: str) -> None:
+        self._mensaje(texto)
+
+    def mostrar_error(self, texto: str) -> None:
+        messagebox.showerror("No se pudo cambiar", texto, parent=self)
+
     def _cambiar_mi_clave(self) -> None:
+        """La ventana solo muestra el formulario; validar y cambiar la clave lo hace el presentador."""
         datos = pedir_datos(self, self.tema, "Cambiar mi contraseña", [
             Campo("actual", "Contraseña actual", "clave"),
             Campo("nueva", "Contraseña nueva (mín. 6)", "clave"),
             Campo("repetir", "Repetir la nueva", "clave")], "Cambiar")
-        if not datos:
-            return
-        try:
-            if datos["nueva"] != datos["repetir"]:
-                raise ValueError("Las contraseñas nuevas no coinciden")
-            self._autenticador.cambiar_clave(self.cuenta.usuario, datos["actual"], datos["nueva"])
-        except ValueError as error:
-            messagebox.showerror("No se pudo cambiar", str(error), parent=self)
-            return
-        self._mensaje("Contraseña actualizada")
+        if datos:
+            PresentadorMiClave(self, self._autenticador, self.cuenta).cambiar(
+                datos["actual"], datos["nueva"], datos["repetir"])
 
     def _cerrar_sesion(self) -> None:
         self.cerro_sesion = True

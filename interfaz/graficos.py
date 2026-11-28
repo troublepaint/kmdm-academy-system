@@ -21,6 +21,7 @@ import tkinter as tk
 from abc import abstractmethod
 from typing import Optional, Sequence
 
+from .componentes import recortar_texto
 from .tema import COLOR_ESTADO, COLORES, Tema
 
 PALETA = ["#2F6FED", "#8B5CF6", "#14B8A6", "#F59E0B", "#EC4899", "#1E9E6A", "#0EA5E9", "#F97316"]
@@ -196,7 +197,7 @@ class GraficoProgreso(Grafico):
             ratio = valor / maximo if maximo else 0
             color = "#D64545" if ratio >= 1 else "#F59E0B" if ratio >= 0.8 else PALETA[i % len(PALETA)]
             mitad = t.px(7)
-            self.create_text(x0, cy, text=self._recortar(nombre, ancho_nombre), anchor="w",
+            self.create_text(x0, cy, text=recortar_texto(t.f_normal, nombre, ancho_nombre), anchor="w",
                              font=t.f_normal, fill=COLORES["texto"])
             self.create_rectangle(pista_x0, cy - mitad, pista_x1, cy + mitad, fill="#EEF1F7", outline="")
             llena = (pista_x1 - pista_x0) * min(ratio, 1) * p
@@ -204,11 +205,3 @@ class GraficoProgreso(Grafico):
                 self.create_rectangle(pista_x0, cy - mitad, pista_x0 + llena, cy + mitad, fill=color, outline="")
             self.create_text(pista_x1 + t.px(8), cy, anchor="w", font=t.f_chica, fill=COLORES["texto_suave"],
                              text=f"{valor:g}/{maximo:g} {self._unidad}" if maximo != 100 else f"{valor:g} %")
-
-    def _recortar(self, texto: str, ancho: float) -> str:
-        fuente = self.tema.f_normal
-        if fuente.measure(texto) <= ancho:
-            return texto
-        while texto and fuente.measure(texto + "…") > ancho:
-            texto = texto[:-1]
-        return texto + "…"
